@@ -1,0 +1,14 @@
+node_modules/
+.DS_Store
+*.log
+.env
+.env.local
+coverage/
+.vscode/
+.idea/
+
+# NOTE: dist/ is intentionally NOT ignored.
+# TypeScript plugins on Plugin Store are distributed via `bun install -g`,
+# which does NOT run the build step. The compiled JS in dist/ must be
+# committed so that installers find dist/index.js at the path declared in
+# package.json's "bin" field.

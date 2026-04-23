@@ -1,0 +1,39 @@
+{
+  "name": "liqgrid",
+  "version": "1.0.0",
+  "description": "Deterministic grid-parameter engine for Hyperliquid perpetuals. Powers the liqgrid Plugin Store Skill.",
+  "type": "module",
+  "bin": {
+    "liqgrid": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "node dist/test.js",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "keywords": [
+    "hyperliquid",
+    "grid",
+    "perpetuals",
+    "trading",
+    "agentic-wallet",
+    "onchain-os"
+  ],
+  "author": "dddd86971-cloud",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dddd86971-cloud/liqgrid.git"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.39",
+    "typescript": "^5.9.3"
+  }
+}
