@@ -1,44 +1,66 @@
 # liqgrid
 
-Deterministic grid-parameter engine for Hyperliquid perpetuals.
-Powers the [`liqgrid`](https://github.com/okx/plugin-store) Plugin Store Skill.
+Deterministic grid-parameter engine for Hyperliquid perpetuals. Powers the
+[`liqgrid`](https://github.com/okx/plugin-store) Plugin Store Skill.
 
-This CLI is **orchestrated by the `liqgrid` Skill**, not meant for direct
+This CLI is **orchestrated by the `liqgrid` Skill**, not intended for direct
 human use. It accepts JSON inputs (market meta + candles + user parameters),
-returns a deterministic `GridPlan` JSON. It does not place orders, does not
-handle private keys, does not make network calls.
+returns a deterministic `GridPlan` JSON. It does **not** place orders, handle
+private keys, or make network calls.
 
-## Why a separate binary?
-
-Grid math needs to be **deterministic** — same inputs always produce the
-same plan. Pure Skill-markdown implementations rely on the LLM to compute
-grid levels, which gives different results across models and even across
-runs with the same model. A compiled binary guarantees consistency.
-
-## Install
-
-End users never install this directly. The Plugin Store installs it
-automatically when they add the `liqgrid` Skill:
+## What's inside
 
 ```
-npx skills add okx/plugin-store --skill liqgrid
+User (natural language)
+  │
+  ▼
+liqgrid Skill (SKILL.md, lives in okx/plugin-store)
+  │
+  ├── hyperliquid-plugin   (fetches mark / funding / 1h candles, signs TX)
+  │
+  └── liqgrid binary       ◄── this repo
+       ├─ plan      → compute grid levels, stop-loss, expected PnL
+       ├─ backtest  → simulate plan over historical candles
+       ├─ explain   → human-readable breakdown of a plan JSON
+       └─ caps      → emit the hard-coded safety limits
 ```
 
-For local development:
+## Why a separate binary
 
-```
+Grid math must be **deterministic** — same inputs always produce the same
+plan, across Node versions, across machines, across LLM model generations.
+Pure Skill-markdown implementations leave the math to the LLM and drift call
+to call. A compiled binary with a stable `planHash` SHA-256 fingerprint
+guarantees reproducibility.
+
+## v1.1.0 highlights
+
+- **Funding-aware asymmetric sizing**: when `marketMeta.fundingRateHourly` is
+  provided, per-rung notional tilts up to ±20% to collect funding as alpha.
+  Symmetric below 10% annualized noise floor; saturates at 50% annualized.
+- **Concentrated-liquidity rung sizing**: each rung's `sizeUsd` is weighted
+  by its Gaussian fill-probability in log-price space. Near-mark rungs get
+  more capital, edge rungs less. `sum(sizeUsd) == totalNotionalUsd` invariant.
+- **`liqgrid backtest`** subcommand: candle-by-candle simulation with FIFO
+  buy-to-sell pairing, realized + unrealized PnL, max drawdown, Sharpe
+  approximation, stop-loss trigger detection.
+
+## Install (local development)
+
+```bash
 npm install
 npm run build
-node dist/test.js    # run self-tests
+node dist/test.js       # 26 self-tests
 node dist/index.js --help
 ```
 
 ## CLI
 
-```
-liqgrid plan --input plan.json        # compute a GridPlan
-liqgrid explain --input plan.json     # human-readable breakdown of a plan
-liqgrid caps                          # emit hard-coded safety caps
+```bash
+liqgrid plan      --input plan.json       # compute a GridPlan
+liqgrid backtest  --input backtest.json   # simulate over historical candles
+liqgrid explain   --input plan.json       # human-readable plan breakdown
+liqgrid caps                              # emit hard-coded safety caps
 liqgrid --help
 liqgrid --version
 ```
@@ -58,18 +80,18 @@ Input JSON shape (matches `src/types.ts:PlanInput`):
     "tickSize": 1,
     "minOrderSizeUsd": 10,
     "markPrice": 92500,
-    "maxLeverage": 20
+    "maxLeverage": 20,
+    "fundingRateHourly": -0.000019
   },
-  "candles": [ ... ]
+  "candles": [ { "open": ..., "high": ..., "low": ..., "close": ..., "timestamp": ... }, ... ]
 }
 ```
 
-Output: a `GridPlan` with `dryRun: true`, `levels`, `stopLossTriggerPrice`,
-`maxLossPctOfNotional`, `expectedFillsPerDay`, `marginRequiredUsd`
-(distinct from `totalNotionalUsd` — margin is what the user needs to
-deposit), a `warnings` array, and a `planHash` (stable sha256 over the
-output's user-meaningful fields — used as a strategy identifier for
-support and for external verification).
+Backtest also takes `backtestWindowBars: <positive int>` to split `candles`
+into history (for vol estimate) and backtest window (for simulation).
+
+Output: a `GridPlan` (or `BacktestResult`) with `dryRun: true`, `warnings[]`,
+and a stable `planHash`.
 
 ## Safety caps (enforced in `src/types.ts`)
 
@@ -87,11 +109,30 @@ order is placed.
 
 ## Determinism
 
-The engine is deterministic: it uses no randomness, no wall-clock reads,
-and no network I/O. Its only external dependency is Node's built-in
-`crypto` module (for `planHash` computation). Given the same input
-bytes, it produces the same output bytes. The test suite in
-`src/test.ts` verifies this across run iterations.
+The engine is deterministic: no `Math.random`, no wall-clock reads, no
+network I/O. The only external dependency is Node's built-in `crypto` module
+for `planHash` computation. Given the same input bytes, it produces the same
+output bytes. The test suite in `src/test.ts` verifies this across run
+iterations (test `deterministic across runs`, `serialization hash is
+stable`, `plan.planHash is embedded and deterministic`, `backtest:
+deterministic and produces valid result`).
+
+## Tests
+
+```bash
+npm test
+```
+
+26 invariants covering:
+
+- Baseline plan correctness (risk profiles, gridCount, level tick alignment)
+- Determinism (JSON serialization + planHash stability across runs)
+- Cap enforcement (notional / leverage / conservative-high-lev downshift)
+- Input validation (missing candles / marketMeta / riskProfile, inverted
+  range, non-positive rangeLow)
+- v1.1 funding bias (noise floor, sign, saturation at ±20%)
+- v1.1 concentrated liquidity (center-heavy sizing invariant)
+- v1.1 backtest (determinism + valid numeric outputs + input validation)
 
 ## License
 
