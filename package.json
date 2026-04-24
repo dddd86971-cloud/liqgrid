@@ -1,6 +1,6 @@
 {
   "name": "liqgrid",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Deterministic grid-parameter engine for Hyperliquid perpetuals. Powers the liqgrid Plugin Store Skill.",
   "type": "module",
   "bin": {

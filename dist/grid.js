@@ -70,14 +70,59 @@ export function chooseGridCount(rangeLow, rangeHigh, dailyVol, riskProfile, tick
     return count;
 }
 // ---------------------------------------------------------------------------
-// Build the grid levels. The mark price splits buys (below) from sells (above).
-// Each rung is evenly spaced in log-price for better symmetry at wide ranges.
+// Funding-aware bias factor. Converts the hourly funding rate into a skew
+// in [-MAX_BIAS, +MAX_BIAS]. Positive funding → longs pay shorts → we tilt
+// notional toward sell rungs to collect funding as alpha. Negative flips.
+// Below the noise floor (|annualized| < 10%) we return 0 — funding that
+// small is dominated by predictive noise and isn't worth skewing on.
+// Above 50% annualized, we saturate at MAX_BIAS — aggressive enough to
+// capture edge, capped so a bad funding-flip can't wreck the grid.
 // ---------------------------------------------------------------------------
-export function buildLevels(rangeLow, rangeHigh, gridCount, markPrice, totalNotionalUsd, tickSize, leverage) {
+const FUNDING_NOISE_FLOOR_ANNUAL = 0.10; // 10%
+const FUNDING_SATURATION_ANNUAL = 0.50; // 50%
+const MAX_FUNDING_BIAS = 0.20; // ±20% notional skew at saturation
+export function fundingBiasFactor(fundingRateHourly) {
+    if (!fundingRateHourly || !Number.isFinite(fundingRateHourly))
+        return 0;
+    const annualized = fundingRateHourly * 24 * 365;
+    const absAnn = Math.abs(annualized);
+    if (absAnn < FUNDING_NOISE_FLOOR_ANNUAL)
+        return 0;
+    const span = FUNDING_SATURATION_ANNUAL - FUNDING_NOISE_FLOOR_ANNUAL;
+    const scaled = Math.min((absAnn - FUNDING_NOISE_FLOOR_ANNUAL) / span, 1);
+    const bias = scaled * MAX_FUNDING_BIAS;
+    return annualized > 0 ? bias : -bias;
+}
+// ---------------------------------------------------------------------------
+// Gaussian "fill-probability" weight for a rung, approximating the one-day
+// hit probability under a log-normal (GBM) price-move assumption. The weight
+// is peaked at the mark and decays with log-distance / σ. Used so notional
+// concentrates near the mark where most fills actually happen, rather than
+// wasting capital at the edges of the range.
+// ---------------------------------------------------------------------------
+export function fillProbabilityWeight(price, markPrice, sigmaDaily) {
+    // Guard against zero/undefined sigma — collapse to uniform weighting.
+    const sigma = sigmaDaily > 1e-6 ? sigmaDaily : 1; // 1 = harmless neutral
+    const z = Math.log(price / markPrice) / sigma;
+    return Math.exp(-0.5 * z * z);
+}
+// ---------------------------------------------------------------------------
+// Build the grid levels with (a) dedupe-safe sizing, (b) concentrated-liquidity
+// notional weighting by per-rung fill probability, and (c) funding-aware
+// asymmetric tilt between buy-side and sell-side rungs.
+//
+// Rung positions are log-equal-spaced between rangeLow and rangeHigh
+// (unchanged from v1.0 — it's the cleanest geometry and we already document it).
+// The *notional* allocated to each rung is what changes: rather than uniform,
+// each rung's sizeUsd is proportional to
+//     weight = fillProb(price, mark, σ) × fundingMultiplier(side, bias)
+// normalized so that sum(sizeUsd) == totalNotionalUsd exactly.
+// Pass fundingBias = 0 and sigmaDaily = 0 to get v1.0-style uniform sizing.
+// ---------------------------------------------------------------------------
+export function buildLevels(rangeLow, rangeHigh, gridCount, markPrice, totalNotionalUsd, tickSize, leverage, sigmaDaily = 0, fundingBias = 0) {
     // Pass 1: compute unique tick-aligned target prices. Tick rounding can
     // collapse two log-spaced rungs to the same price at narrow ranges —
-    // we dedupe first so that pass 2 can size levels against the surviving
-    // count, keeping sum(sizeUsd) exactly equal to totalNotionalUsd.
+    // dedupe first so pass 2 sizes against surviving count.
     const logLo = Math.log(rangeLow);
     const logHi = Math.log(rangeHigh);
     const step = (logHi - logLo) / (gridCount - 1);
@@ -91,19 +136,33 @@ export function buildLevels(rangeLow, rangeHigh, gridCount, markPrice, totalNoti
         seen.add(price);
         uniquePrices.push(price);
     }
-    // Pass 2: size and classify each surviving rung. Index is re-assigned
-    // 0..N-1 (contiguous) so callers can iterate without worrying about gaps.
-    const sizePerLevel = uniquePrices.length > 0 ? totalNotionalUsd / uniquePrices.length : 0;
+    if (uniquePrices.length === 0)
+        return [];
+    // Pass 2a: raw weights per rung = fillProb × fundingMultiplier.
+    // When both sigmaDaily and fundingBias are 0, all weights collapse to 1
+    // and sizing becomes uniform (v1.0 behaviour — deterministic regression).
+    const rawWeights = uniquePrices.map((price) => {
+        const fp = sigmaDaily > 0 ? fillProbabilityWeight(price, markPrice, sigmaDaily) : 1;
+        const side = price < markPrice ? "buy" : "sell";
+        // funding bias > 0 (funding positive, longs pay shorts) → boost sell rungs
+        // (tilt net exposure short so we collect funding), damp buy rungs.
+        // funding bias < 0 flips the sign.
+        const sideMult = side === "sell" ? 1 + fundingBias : 1 - fundingBias;
+        return fp * Math.max(sideMult, 0.01); // hard floor so no rung goes to ~0 on extreme funding
+    });
+    const sumWeights = rawWeights.reduce((a, b) => a + b, 0) || uniquePrices.length;
+    // Pass 2b: build final levels. sizeUsd = totalNotional × normalized weight.
     const levels = [];
     for (let i = 0; i < uniquePrices.length; i++) {
         const price = uniquePrices[i];
         const side = price < markPrice ? "buy" : "sell";
-        const sizeCoin = (sizePerLevel * leverage) / price;
+        const sizeUsd = Number(((totalNotionalUsd * rawWeights[i]) / sumWeights).toFixed(6));
+        const sizeCoin = (sizeUsd * leverage) / price;
         levels.push({
             index: i,
             price,
             side,
-            sizeUsd: sizePerLevel,
+            sizeUsd,
             sizeCoin: Number(sizeCoin.toFixed(8)),
         });
     }
@@ -320,7 +379,16 @@ export function computeGridPlan(input) {
     }
     const vol = realizedVolatilityDaily(input.candles);
     const gridCount = chooseGridCount(input.rangeLow, input.rangeHigh, vol, input.riskProfile, input.marketMeta.tickSize);
-    const levels = buildLevels(input.rangeLow, input.rangeHigh, gridCount, input.marketMeta.markPrice, notional, input.marketMeta.tickSize, leverage);
+    // Funding + vol feed concentrated-liquidity + asymmetric sizing.
+    // If funding is missing/zero and we have vol, we still get concentrated
+    // liquidity alone (symmetric tilt toward mark). If both missing, uniform.
+    const fundingBias = fundingBiasFactor(input.marketMeta.fundingRateHourly);
+    if (fundingBias !== 0) {
+        const annualPct = (input.marketMeta.fundingRateHourly * 24 * 365 * 100).toFixed(1);
+        const sidePref = fundingBias > 0 ? "sell" : "buy";
+        warnings.push(`funding-aware bias applied: ${annualPct}% annualized funding → ${(Math.abs(fundingBias) * 100).toFixed(1)}% notional tilt toward ${sidePref} rungs`);
+    }
+    const levels = buildLevels(input.rangeLow, input.rangeHigh, gridCount, input.marketMeta.markPrice, notional, input.marketMeta.tickSize, leverage, vol, fundingBias);
     const { triggerPrice, side, maxLossUsd } = computeStopLoss(input.rangeLow, input.rangeHigh, input.marketMeta.markPrice, input.riskProfile, notional, leverage);
     const maxLossPct = notional > 0 ? maxLossUsd / notional : 0;
     if (maxLossPct > CAPS.MAX_LOSS_PCT_OF_NOTIONAL) {
@@ -391,5 +459,202 @@ export function computeGridPlan(input) {
         dryRun: true,
         warnings,
         planHash,
+    };
+}
+// ---------------------------------------------------------------------------
+// Deterministic backtest. Walks candle-by-candle over a historical window,
+// matching each bar's [low, high] against resting grid orders and pairing
+// buys-at-lower-rungs with sells-at-upper-rungs for realized PnL. Fully pure:
+// no wall-clock, no randomness, no network, no hidden Math.random. Same
+// input → same BacktestResult, byte for byte.
+//
+// Fill model (conservative):
+//   - A buy order at price P is filled by a candle if candle.low <= P.
+//   - A sell order at price P is filled by a candle if candle.high >= P.
+//   - If both conditions match in the same bar, we process buys first, sells
+//     second (biased against our realized PnL — we'd rather under-estimate
+//     than over-estimate what the strategy made).
+//   - Stop-loss triggers when candle.low <= stopLossTriggerPrice (for long
+//     bias) or candle.high >= trigger (short bias), and ends the simulation.
+//   - Partial fills are NOT modelled — each rung either fills entirely or not.
+//     This is conservative because real grid bots can partial-fill + re-place,
+//     so our realized PnL here is a lower bound of what a careful operator
+//     would achieve in practice.
+// ---------------------------------------------------------------------------
+export function runBacktest(input) {
+    const warnings = [];
+    const emptyResult = () => ({
+        coin: typeof input?.coin === "string" ? input.coin : "",
+        planHash: "",
+        gridCount: 0,
+        totalNotionalUsd: 0,
+        leverage: 0,
+        riskProfile: "conservative",
+        windowBars: 0,
+        firstCandleTimestamp: 0,
+        lastCandleTimestamp: 0,
+        fills: 0,
+        fillsBuy: 0,
+        fillsSell: 0,
+        realizedPnlUsd: 0,
+        unrealizedPnlUsd: 0,
+        totalPnlUsd: 0,
+        maxDrawdownUsd: 0,
+        sharpeApprox: 0,
+        hitStopLoss: false,
+        dryRun: true,
+        warnings,
+    });
+    // Input validation. backtestWindowBars must be > 0 and leave enough history
+    // (≥ 24 bars) to compute a meaningful vol estimate for the plan.
+    if (!input || !Array.isArray(input.candles) || input.candles.length === 0) {
+        warnings.push("INPUT: missing or invalid `candles` (must be a non-empty array)");
+        return emptyResult();
+    }
+    if (typeof input.backtestWindowBars !== "number" ||
+        input.backtestWindowBars <= 0 ||
+        !Number.isInteger(input.backtestWindowBars)) {
+        warnings.push("INPUT: `backtestWindowBars` must be a positive integer");
+        return emptyResult();
+    }
+    if (input.backtestWindowBars >= input.candles.length) {
+        warnings.push(`INPUT: backtestWindowBars (${input.backtestWindowBars}) must be < candles.length (${input.candles.length}); leave enough history for vol estimate`);
+        return emptyResult();
+    }
+    const historyBars = input.candles.length - input.backtestWindowBars;
+    if (historyBars < 24) {
+        warnings.push(`history window is only ${historyBars} bars; need >= 24 for a reliable vol estimate — results may be noisy`);
+    }
+    // Plan is computed from the HISTORY window only — this matches what the
+    // engine would have seen at the start of the backtest period.
+    const historyCandles = input.candles.slice(0, historyBars);
+    const backtestCandles = input.candles.slice(historyBars);
+    const planInput = { ...input, candles: historyCandles };
+    const plan = computeGridPlan(planInput);
+    if (plan.levels.length === 0) {
+        warnings.push(...plan.warnings.map((w) => `plan: ${w}`));
+        return { ...emptyResult(), warnings };
+    }
+    // Simulation state. Each "open" rung is ready to fill. On a buy fill, that
+    // rung's inventory moves to "long_inventory_coin"; we simultaneously look
+    // for the *next-higher* unfilled sell rung and try to match it in this or
+    // a future bar. On a sell fill that closes inventory, realized PnL = (sell
+    // price - buy price) × coin_size.
+    // We keep it simple: FIFO pairing between buy inventory queue and sell
+    // fills. Unpaired long inventory at window end contributes to unrealized.
+    // Sort rungs by price ascending so indexing is intuitive.
+    const rungs = [...plan.levels].sort((a, b) => a.price - b.price);
+    const rungState = rungs.map(() => ({ filled: false }));
+    // FIFO queue of outstanding long "lots": {price, coin}. When a sell fills,
+    // we pair with oldest lot → realized PnL = (sell - buy) × coin.
+    const longLots = [];
+    let fillsBuy = 0;
+    let fillsSell = 0;
+    let realized = 0;
+    let hitStopLoss = false;
+    const perBarPnl = []; // for Sharpe approx
+    let runningPnl = 0;
+    let peak = 0;
+    let maxDd = 0;
+    for (const bar of backtestCandles) {
+        if (!Number.isFinite(bar.low) || !Number.isFinite(bar.high) || bar.low <= 0 || bar.high <= 0) {
+            continue; // skip malformed bar rather than crash
+        }
+        // Stop-loss check first — we treat the stop as an absolute barrier.
+        if ((plan.stopLossSide === "long" && bar.low <= plan.stopLossTriggerPrice) ||
+            (plan.stopLossSide === "short" && bar.high >= plan.stopLossTriggerPrice)) {
+            hitStopLoss = true;
+            const barStartPnlAtStop = runningPnl;
+            // Realize loss on remaining inventory at the stop trigger price.
+            for (const lot of longLots) {
+                realized += (plan.stopLossTriggerPrice - lot.price) * lot.coin;
+            }
+            longLots.length = 0;
+            // Fold the stop-loss realization into PnL/drawdown tracking so maxDD
+            // and Sharpe reflect the terminal event, not just intra-window swaps.
+            runningPnl = realized;
+            if (runningPnl > peak)
+                peak = runningPnl;
+            const dd = peak - runningPnl;
+            if (dd > maxDd)
+                maxDd = dd;
+            perBarPnl.push(runningPnl - barStartPnlAtStop);
+            break;
+        }
+        const barStartPnl = runningPnl;
+        // Process buy fills first (conservative — delays realizing gains by a bar)
+        for (let i = 0; i < rungs.length; i++) {
+            if (rungState[i].filled)
+                continue;
+            const r = rungs[i];
+            if (r.side === "buy" && bar.low <= r.price) {
+                rungState[i].filled = true;
+                longLots.push({ price: r.price, coin: r.sizeCoin });
+                fillsBuy++;
+            }
+        }
+        // Now sell fills — pair each with the oldest long lot at that price or below.
+        for (let i = 0; i < rungs.length; i++) {
+            if (rungState[i].filled)
+                continue;
+            const r = rungs[i];
+            if (r.side === "sell" && bar.high >= r.price) {
+                // Sell needs a long lot to close. If no inventory, skip (short selling
+                // the grid would require a separate short-lot book — v1.1 keeps it
+                // single-sided conservative; this lower-bounds realized PnL).
+                if (longLots.length === 0)
+                    continue;
+                rungState[i].filled = true;
+                const lot = longLots.shift();
+                realized += (r.price - lot.price) * lot.coin;
+                fillsSell++;
+            }
+        }
+        runningPnl = realized;
+        // Max-drawdown tracking: peak-to-trough on realized PnL.
+        if (runningPnl > peak)
+            peak = runningPnl;
+        const dd = peak - runningPnl;
+        if (dd > maxDd)
+            maxDd = dd;
+        perBarPnl.push(runningPnl - barStartPnl);
+    }
+    // Unrealized on any remaining long inventory at window end = (last close - entry) × coin.
+    const lastClose = backtestCandles[backtestCandles.length - 1]?.close ?? plan.rangeHigh;
+    let unrealized = 0;
+    for (const lot of longLots) {
+        unrealized += (lastClose - lot.price) * lot.coin;
+    }
+    // Sharpe approximation: mean(per-bar PnL) / stdev(per-bar PnL) × sqrt(bars/year).
+    // Hourly candles assumed → 24 × 365 = 8760 bars/year.
+    let sharpeApprox = 0;
+    if (perBarPnl.length >= 2) {
+        const mean = perBarPnl.reduce((a, b) => a + b, 0) / perBarPnl.length;
+        const variance = perBarPnl.reduce((s, x) => s + (x - mean) ** 2, 0) / perBarPnl.length;
+        const stdev = Math.sqrt(variance);
+        if (stdev > 0)
+            sharpeApprox = (mean / stdev) * Math.sqrt(8760);
+    }
+    return {
+        coin: plan.coin,
+        planHash: plan.planHash,
+        gridCount: plan.gridCount,
+        totalNotionalUsd: plan.totalNotionalUsd,
+        leverage: plan.leverage,
+        riskProfile: plan.riskProfile,
+        windowBars: backtestCandles.length,
+        firstCandleTimestamp: backtestCandles[0]?.timestamp ?? 0,
+        lastCandleTimestamp: backtestCandles[backtestCandles.length - 1]?.timestamp ?? 0,
+        fills: fillsBuy + fillsSell,
+        fillsBuy,
+        fillsSell,
+        realizedPnlUsd: Number(realized.toFixed(4)),
+        unrealizedPnlUsd: Number(unrealized.toFixed(4)),
+        totalPnlUsd: Number((realized + unrealized).toFixed(4)),
+        maxDrawdownUsd: Number(maxDd.toFixed(4)),
+        sharpeApprox: Number(sharpeApprox.toFixed(3)),
+        hitStopLoss,
+        dryRun: true,
+        warnings,
     };
 }

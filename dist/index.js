@@ -12,9 +12,9 @@
 //   liqgrid --version
 //   liqgrid caps
 import { readFileSync } from "node:fs";
-import { computeGridPlan } from "./grid.js";
+import { computeGridPlan, runBacktest } from "./grid.js";
 import { CAPS } from "./types.js";
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 function printHelp() {
     // eslint-disable-next-line no-console
     console.log(`liqgrid v${VERSION}
@@ -23,11 +23,16 @@ Deterministic grid-parameter engine for Hyperliquid perpetuals.
 Called by the liqgrid Skill — not intended for direct human use.
 
 Usage:
-  liqgrid plan [--input <file>]     Compute a GridPlan from JSON input
-  liqgrid explain [--input <file>]  Human-readable breakdown of a plan
-  liqgrid caps                      Emit hard-coded safety caps as JSON
-  liqgrid --help                    Show this help
-  liqgrid --version                 Print version
+  liqgrid plan [--input <file>]      Compute a GridPlan from JSON input
+  liqgrid backtest [--input <file>]  Simulate a plan over historical candles
+  liqgrid explain [--input <file>]   Human-readable breakdown of a plan
+  liqgrid caps                       Emit hard-coded safety caps as JSON
+  liqgrid --help                     Show this help
+  liqgrid --version                  Print version
+
+Note: plan accepts optional marketMeta.fundingRateHourly (hourly funding
+rate as a fraction). When provided and |annualized| >= 10%, liqgrid tilts
+per-rung notional asymmetrically (up to ±20%) to collect funding as alpha.
 
 Input shape (JSON):
   {
@@ -122,6 +127,17 @@ function main() {
             const plan = computeGridPlan(input);
             // eslint-disable-next-line no-console
             console.log(JSON.stringify(plan, null, 2));
+            return;
+        }
+        case "backtest": {
+            // Takes a BacktestInput (same as PlanInput + `backtestWindowBars`) and
+            // returns a BacktestResult with fill counts, realized PnL, max drawdown,
+            // and a Sharpe approximation. Fully deterministic — same candles in,
+            // same numbers out. No network, no wall-clock, no randomness.
+            const input = parseInput(argv);
+            const result = runBacktest(input);
+            // eslint-disable-next-line no-console
+            console.log(JSON.stringify(result, null, 2));
             return;
         }
         case "explain": {

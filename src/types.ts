@@ -18,6 +18,11 @@ export interface MarketMeta {
   minOrderSizeUsd: number;
   markPrice: number;
   maxLeverage: number;
+  // Optional: hourly funding rate as a fraction (e.g. 0.0001 = 1bp/hour ≈ 0.88% annualized).
+  // When provided, liqgrid tilts per-rung notional asymmetrically to collect funding
+  // as alpha — positive funding biases toward sell-side rungs, negative toward buy.
+  // Omit / undefined / 0 disables the bias and the engine behaves symmetrically.
+  fundingRateHourly?: number;
 }
 
 export interface PlanInput {
@@ -29,6 +34,37 @@ export interface PlanInput {
   riskProfile: RiskProfile;
   marketMeta: MarketMeta;
   candles: Candle[];
+}
+
+// Input to `liqgrid backtest`. Reuses PlanInput shape but adds a split: candles
+// before index (candles.length - backtestWindowBars) are used for vol estimate
+// (i.e. "what the engine would see when planning"), candles from that index
+// to the end are walked bar-by-bar to simulate fills against the grid.
+export interface BacktestInput extends PlanInput {
+  backtestWindowBars: number;
+}
+
+export interface BacktestResult {
+  coin: string;
+  planHash: string; // same hash as the plan produced from the history window
+  gridCount: number;
+  totalNotionalUsd: number;
+  leverage: number;
+  riskProfile: RiskProfile;
+  windowBars: number;
+  firstCandleTimestamp: number;
+  lastCandleTimestamp: number;
+  fills: number;
+  fillsBuy: number;
+  fillsSell: number;
+  realizedPnlUsd: number;
+  unrealizedPnlUsd: number; // on any open inventory at window end
+  totalPnlUsd: number;
+  maxDrawdownUsd: number;
+  sharpeApprox: number; // realized PnL / stdev of per-bar PnL * sqrt(bars per year)
+  hitStopLoss: boolean;
+  dryRun: true;
+  warnings: string[];
 }
 
 export interface GridLevel {

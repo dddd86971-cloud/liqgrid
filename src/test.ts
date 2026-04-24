@@ -277,5 +277,131 @@ runTest("level sizing sums to totalNotionalUsd", baseInput, (plan) => {
   });
 });
 
+// 16. v1.1 — Funding bias factor: below noise floor → 0; positive funding → positive;
+// negative → negative; saturates at ±20%.
+import { fundingBiasFactor, fillProbabilityWeight, runBacktest } from "./grid.js";
+
+runTest("fundingBiasFactor: below noise floor returns 0", baseInput, () => {
+  // 0.00001/hour × 8760 = 8.76% annual — below 10% floor.
+  assert(fundingBiasFactor(0.00001) === 0, "funding at 8.76% annual should be 0 bias");
+  assert(fundingBiasFactor(-0.00001) === 0, "negative funding below floor should be 0");
+  assert(fundingBiasFactor(undefined) === 0, "undefined funding should be 0");
+  assert(fundingBiasFactor(0) === 0, "zero funding should be 0");
+});
+
+// 17. v1.1 — Funding bias monotonic + sign-correct + saturation clamp.
+runTest("fundingBiasFactor: monotonic, sign-correct, saturates at 0.20", baseInput, () => {
+  // 0.0001/hour = 87.6% annual → saturated.
+  const highPos = fundingBiasFactor(0.0001);
+  const highNeg = fundingBiasFactor(-0.0001);
+  assert(Math.abs(highPos - 0.2) < 1e-9, `expected saturation 0.2, got ${highPos}`);
+  assert(Math.abs(highNeg - -0.2) < 1e-9, `expected saturation -0.2, got ${highNeg}`);
+  // Mid-range: 0.00003/hour ≈ 26.3% annual; (26.3-10)/(50-10) ≈ 0.408; × 0.2 ≈ 0.0816.
+  const mid = fundingBiasFactor(0.00003);
+  assert(mid > 0.05 && mid < 0.12, `mid-range funding bias expected ~0.08, got ${mid}`);
+});
+
+// 18. v1.1 — fillProbabilityWeight: peaked at mark, decays symmetrically in log-price.
+runTest("fillProbabilityWeight: peaked at mark, decays symmetrically", baseInput, () => {
+  const mark = 92500;
+  const sigma = 0.02; // 2% daily vol
+  const wAtMark = fillProbabilityWeight(mark, mark, sigma);
+  const wAbove = fillProbabilityWeight(mark * 1.05, mark, sigma);
+  const wBelow = fillProbabilityWeight(mark / 1.05, mark, sigma);
+  assert(Math.abs(wAtMark - 1) < 1e-9, `weight at mark must be 1, got ${wAtMark}`);
+  assert(wAbove < wAtMark, "weight above mark should be < at mark");
+  assert(wBelow < wAtMark, "weight below mark should be < at mark");
+  // Symmetry in log-space: equidistant in log should have nearly equal weights.
+  assert(
+    Math.abs(wAbove - wBelow) < 1e-6,
+    `log-symmetry broken: wAbove=${wAbove} wBelow=${wBelow}`
+  );
+});
+
+// 19. v1.1 — Funding-aware sizing: positive funding → sell-side total > buy-side total.
+runTest("funding-positive plan tilts notional toward sell-side", baseInput, () => {
+  const positiveFunding = {
+    ...baseInput,
+    marketMeta: { ...baseInput.marketMeta, fundingRateHourly: 0.0001 }, // 87.6% annual → saturated
+  };
+  const plan = computeGridPlan(positiveFunding);
+  const buySum = plan.levels.filter((l) => l.side === "buy").reduce((s, l) => s + l.sizeUsd, 0);
+  const sellSum = plan.levels.filter((l) => l.side === "sell").reduce((s, l) => s + l.sizeUsd, 0);
+  assert(sellSum > buySum, `expected sellSum > buySum at positive funding; got sell=${sellSum} buy=${buySum}`);
+  // Total notional invariant still holds.
+  assert(
+    Math.abs((buySum + sellSum) - plan.totalNotionalUsd) < 0.01,
+    `sum(sizeUsd)=${buySum + sellSum} must equal totalNotionalUsd=${plan.totalNotionalUsd}`
+  );
+  // Warning about funding bias is surfaced.
+  assert(
+    plan.warnings.some((w) => w.includes("funding-aware")),
+    "expected funding-aware warning in plan.warnings"
+  );
+});
+
+// 20. v1.1 — Concentrated liquidity: mid rungs have more notional than edge rungs
+// when funding is zero (pure fill-probability weighting).
+runTest("concentrated-liquidity: center-heavy sizing with no funding", baseInput, (plan) => {
+  if (plan.levels.length < 5) return; // need enough rungs to see the effect
+  const sorted = [...plan.levels].sort((a, b) => Math.abs(a.price - baseInput.marketMeta.markPrice) - Math.abs(b.price - baseInput.marketMeta.markPrice));
+  const centerRung = sorted[0];
+  const edgeRung = sorted[sorted.length - 1];
+  assert(
+    centerRung.sizeUsd > edgeRung.sizeUsd,
+    `center rung @${centerRung.price} should have > notional than edge @${edgeRung.price}, got ${centerRung.sizeUsd} vs ${edgeRung.sizeUsd}`
+  );
+});
+
+// 21. v1.1 — Backtest: runs deterministically over a synthetic candle window
+// and produces a numeric result. Same input → same output, byte for byte.
+runTest("backtest: deterministic and produces valid result", baseInput, () => {
+  // Build a longer candle series so we have history + backtest window.
+  const longCandles: Candle[] = [];
+  let price = 92500;
+  for (let i = 0; i < 336; i++) {
+    // 2 weeks of hourly bars — more variance so grid can actually fill.
+    const drift = Math.sin(i * 0.17) * 0.018 + Math.cos(i * 0.29) * 0.009;
+    price = price * (1 + drift);
+    longCandles.push({
+      open: price * 0.999,
+      high: price * 1.005,
+      low: price * 0.995,
+      close: price,
+      timestamp: i * 3600_000,
+    });
+  }
+  const btInput = {
+    ...baseInput,
+    candles: longCandles,
+    backtestWindowBars: 168, // last 7 days
+  };
+  const r1 = runBacktest(btInput);
+  const r2 = runBacktest(btInput);
+  assert(JSON.stringify(r1) === JSON.stringify(r2), "backtest non-deterministic");
+  assert(r1.windowBars === 168, `expected windowBars=168, got ${r1.windowBars}`);
+  assert(r1.fills >= 0, "fills must be non-negative");
+  assert(r1.fillsBuy + r1.fillsSell === r1.fills, "fillsBuy + fillsSell != fills");
+  assert(Number.isFinite(r1.realizedPnlUsd), "realizedPnlUsd must be finite");
+  assert(Number.isFinite(r1.totalPnlUsd), "totalPnlUsd must be finite");
+  assert(r1.maxDrawdownUsd >= 0, "maxDrawdownUsd must be non-negative");
+  assert(r1.dryRun === true, "backtest must be dryRun");
+  assert(typeof r1.planHash === "string" && r1.planHash.length === 64, "backtest planHash missing or wrong length");
+  // eslint-disable-next-line no-console
+  console.log(`  fills=${r1.fills} (buy=${r1.fillsBuy} sell=${r1.fillsSell}) realized=$${r1.realizedPnlUsd} maxDD=$${r1.maxDrawdownUsd} sharpe=${r1.sharpeApprox}`);
+});
+
+// 22. v1.1 — Backtest input validation: bad window → safe empty result.
+runTest("backtest: invalid window returns warning'd empty result", baseInput, () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bad: any = { ...baseInput, backtestWindowBars: 0 };
+  const r = runBacktest(bad);
+  assert(r.fills === 0 && r.windowBars === 0, "expected empty result on bad window");
+  assert(
+    r.warnings.some((w) => w.startsWith("INPUT:") && w.includes("backtestWindowBars")),
+    "expected INPUT warning about backtestWindowBars"
+  );
+});
+
 // eslint-disable-next-line no-console
 console.log("\nAll self-tests passed ✅");
