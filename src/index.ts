@@ -14,11 +14,11 @@
 //   liqgrid caps
 
 import { readFileSync } from "node:fs";
-import { computeGridPlan, runBacktest } from "./grid.js";
-import type { PlanInput, BacktestInput } from "./types.js";
+import { computeGridPlan, runBacktest, runQuickstart, runOptimize } from "./grid.js";
+import type { PlanInput, BacktestInput, QuickstartInput, OptimizeInput } from "./types.js";
 import { CAPS } from "./types.js";
 
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 
 function printHelp(): void {
   // eslint-disable-next-line no-console
@@ -28,12 +28,16 @@ Deterministic grid-parameter engine for Hyperliquid perpetuals.
 Called by the liqgrid Skill — not intended for direct human use.
 
 Usage:
-  liqgrid plan [--input <file>]      Compute a GridPlan from JSON input
-  liqgrid backtest [--input <file>]  Simulate a plan over historical candles
-  liqgrid explain [--input <file>]   Human-readable breakdown of a plan
-  liqgrid caps                       Emit hard-coded safety caps as JSON
-  liqgrid --help                     Show this help
-  liqgrid --version                  Print version
+  liqgrid plan [--input <file>]       Compute a GridPlan from JSON input
+  liqgrid quickstart [--input <file>] Suggest defaults (range, leverage, profile)
+                                       from coin + notional + candles
+  liqgrid optimize [--input <file>]   Sweep (range, leverage, profile) on
+                                       historical candles, return top-N
+  liqgrid backtest [--input <file>]   Simulate a plan over historical candles
+  liqgrid explain [--input <file>]    Human-readable breakdown of a plan
+  liqgrid caps                        Emit hard-coded safety caps as JSON
+  liqgrid --help                      Show this help
+  liqgrid --version                   Print version
 
 Note: plan accepts optional marketMeta.fundingRateHourly (hourly funding
 rate as a fraction). When provided and |annualized| >= 10%, liqgrid tilts
@@ -134,6 +138,26 @@ function main(): void {
       const plan = computeGridPlan(input);
       // eslint-disable-next-line no-console
       console.log(JSON.stringify(plan, null, 2));
+      return;
+    }
+    case "quickstart": {
+      // Zero-friction first-time use. Input: coin + notional + candles +
+      // marketMeta. Output: a recommended (rangeLow, rangeHigh, leverage,
+      // riskProfile) plus a ready-to-pipe PlanInput.
+      const input = parseInput(argv) as unknown as QuickstartInput;
+      const result = runQuickstart(input);
+      // eslint-disable-next-line no-console
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    case "optimize": {
+      // Deterministic parameter sweep. Input: coin + notional + candles +
+      // marketMeta. Output: top-N (rangeLow, rangeHigh, leverage, profile)
+      // candidates ranked by realizedPnl / max(maxDD, 1) Calmar-style score.
+      const input = parseInput(argv) as unknown as OptimizeInput;
+      const result = runOptimize(input);
+      // eslint-disable-next-line no-console
+      console.log(JSON.stringify(result, null, 2));
       return;
     }
     case "backtest": {

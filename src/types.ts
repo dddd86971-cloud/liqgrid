@@ -44,6 +44,74 @@ export interface BacktestInput extends PlanInput {
   backtestWindowBars: number;
 }
 
+// Input to `liqgrid quickstart`. Minimal: coin + notional + candles. Engine
+// suggests sensible (rangeLow, rangeHigh, leverage, riskProfile) defaults
+// from the recent vol regime so the user doesn't need to pick range manually.
+export interface QuickstartInput {
+  coin: string;
+  totalNotionalUsd: number;
+  candles: Candle[];
+  marketMeta: MarketMeta;
+  riskProfile?: RiskProfile;
+  // optional override for "how much recent history defines the range" (default 168h = 7d)
+  windowBars?: number;
+}
+
+export interface QuickstartResult {
+  coin: string;
+  recommendedRangeLow: number;
+  recommendedRangeHigh: number;
+  recommendedLeverage: number;
+  riskProfile: RiskProfile;
+  totalNotionalUsd: number;
+  // contextual signals the recommendation was derived from
+  markPrice: number;
+  realizedDailyVol: number;
+  windowBars: number;
+  localLow: number;
+  localHigh: number;
+  rationale: string;
+  // ready-to-pipe PlanInput so the agent can run `liqgrid plan` directly
+  planInput: PlanInput;
+  warnings: string[];
+}
+
+// Input to `liqgrid optimize`. Engine sweeps over a small grid of
+// (range_width_pct, leverage, riskProfile) combinations, runs `runBacktest`
+// on each, and ranks by a Calmar-style score (realizedPnl / max(maxDD, 1)).
+// Pure compute, deterministic, no network.
+export interface OptimizeInput {
+  coin: string;
+  totalNotionalUsd: number;
+  candles: Candle[];
+  marketMeta: MarketMeta;
+  // window of candles used for the per-trial backtest (default 168h = 7d)
+  backtestWindowBars?: number;
+  // how many top candidates to return (default 3, hard max 10)
+  topN?: number;
+}
+
+export interface OptimizeCandidate {
+  rangeLow: number;
+  rangeHigh: number;
+  leverage: number;
+  riskProfile: RiskProfile;
+  rangeWidthPct: number; // (rangeHigh - rangeLow) / mark
+  realizedPnlUsd: number;
+  maxDrawdownUsd: number;
+  fills: number;
+  hitStopLoss: boolean;
+  score: number; // higher is better
+}
+
+export interface OptimizeResult {
+  coin: string;
+  totalNotionalUsd: number;
+  totalEvaluated: number;
+  candidates: OptimizeCandidate[]; // top N, descending score
+  warnings: string[];
+}
+
 export interface BacktestResult {
   coin: string;
   planHash: string; // same hash as the plan produced from the history window

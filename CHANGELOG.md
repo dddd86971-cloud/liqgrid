@@ -2,6 +2,42 @@
 
 All notable changes to liqgrid are documented here.
 
+## [1.2.0] — 2026-04-25
+
+Two new binary subcommands. The runtime contract on `plan`, `backtest`,
+`explain`, `caps` is unchanged — `quickstart` and `optimize` are additive
+helpers.
+
+### Added
+
+- **`liqgrid quickstart`** — zero-friction first-time use. Given just
+  `coin`, `totalNotionalUsd`, `candles`, and `marketMeta`, the engine
+  derives a sensible `(rangeLow, rangeHigh, leverage, riskProfile)` from
+  the recent vol regime (mark ± 1.5 × σ_daily × √7 × profileWidth, then
+  clamped to the recent local low/high so the range stays plausible vs the
+  current market). Returns a ready-to-pipe `PlanInput`. Implementation:
+  `runQuickstart()` in `src/grid.ts`.
+
+- **`liqgrid optimize`** — deterministic parameter sweep. Iterates over
+  5 range-widths × 5 leverages × 3 risk profiles = up to 75 combinations,
+  runs `runBacktest` on each, ranks by a Calmar-style score
+  (`realizedPnlUsd / max(maxDrawdownUsd, 1)`), and returns the top N.
+  Same input bytes → same ranking, byte-for-byte. Implementation:
+  `runOptimize()` in `src/grid.ts`.
+
+- **Self-tests: 26 → 30.** Quickstart producing a downstream-valid
+  `PlanInput`; quickstart input validation; optimize determinism + ranking
+  invariants; optimize input validation.
+
+### Notes
+
+- Quickstart respects `marketMeta.maxLeverage` and `CAPS.MAX_LEVERAGE`
+  hard caps when picking leverage.
+- Optimize candidate sweep is fixed at compile time (constants
+  `OPTIMIZE_RANGE_WIDTH_PCTS`, `OPTIMIZE_LEVERAGES`, `OPTIMIZE_PROFILES`)
+  so determinism is preserved regardless of inputs. Adding a candidate
+  outside the sweep requires a code change + version bump.
+
 ## [1.1.0] — 2026-04-25
 
 Three additions to the deterministic engine. Same input still produces a

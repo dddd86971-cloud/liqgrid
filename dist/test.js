@@ -336,5 +336,82 @@ runTest("backtest: invalid window returns warning'd empty result", baseInput, ()
     assert(r.fills === 0 && r.windowBars === 0, "expected empty result on bad window");
     assert(r.warnings.some((w) => w.startsWith("INPUT:") && w.includes("backtestWindowBars")), "expected INPUT warning about backtestWindowBars");
 });
+// 23. v1.2 — Quickstart: produces a valid PlanInput from minimal inputs.
+import { runQuickstart, runOptimize } from "./grid.js";
+runTest("quickstart: derives a valid PlanInput from coin + notional + candles", baseInput, () => {
+    const qs = runQuickstart({
+        coin: "BTC",
+        totalNotionalUsd: 300,
+        candles: baseInput.candles,
+        marketMeta: baseInput.marketMeta,
+    });
+    assert(qs.recommendedRangeLow > 0, "rangeLow must be positive");
+    assert(qs.recommendedRangeHigh > qs.recommendedRangeLow, "rangeHigh > rangeLow");
+    assert(qs.recommendedLeverage >= 1 && qs.recommendedLeverage <= CAPS.MAX_LEVERAGE, "leverage in valid range");
+    assert(qs.planInput.coin === "BTC", "planInput.coin must match");
+    assert(qs.planInput.rangeLow === qs.recommendedRangeLow, "planInput must match recommendation");
+    // Pipe into computeGridPlan and verify it produces a valid plan.
+    const plan = computeGridPlan(qs.planInput);
+    assert(plan.gridCount >= CAPS.MIN_GRID_COUNT, "downstream plan must produce >= min grid count");
+    assert(plan.warnings.filter((w) => w.startsWith("INPUT:")).length === 0, "no INPUT warnings");
+});
+// 24. v1.2 — Quickstart: too few candles returns empty result.
+runTest("quickstart: insufficient candles returns warning'd empty result", baseInput, () => {
+    const qs = runQuickstart({
+        coin: "BTC",
+        totalNotionalUsd: 300,
+        candles: baseInput.candles.slice(0, 5),
+        marketMeta: baseInput.marketMeta,
+    });
+    assert(qs.recommendedRangeLow === 0, "rangeLow=0 on insufficient candles");
+    assert(qs.warnings.some((w) => w.startsWith("INPUT:") && w.includes("candles")), "expected INPUT warning about candles count");
+});
+// 25. v1.2 — Optimize: deterministic, returns ranked candidates with valid math.
+runTest("optimize: returns top-N ranked candidates over a sweep", baseInput, () => {
+    // Need a longer candle series so backtest has history + window per trial.
+    const longCandles = [];
+    let price = 92500;
+    for (let i = 0; i < 336; i++) {
+        const drift = Math.sin(i * 0.17) * 0.018 + Math.cos(i * 0.29) * 0.009;
+        price = price * (1 + drift);
+        longCandles.push({ open: price * 0.999, high: price * 1.005, low: price * 0.995, close: price, timestamp: i * 3600_000 });
+    }
+    const input = {
+        coin: "BTC",
+        totalNotionalUsd: 300,
+        candles: longCandles,
+        marketMeta: baseInput.marketMeta,
+        backtestWindowBars: 168,
+        topN: 3,
+    };
+    const r1 = runOptimize(input);
+    const r2 = runOptimize(input);
+    assert(JSON.stringify(r1) === JSON.stringify(r2), "optimize is non-deterministic");
+    assert(r1.totalEvaluated > 0, "must evaluate at least one combo");
+    assert(r1.candidates.length <= 3, "topN respected");
+    if (r1.candidates.length >= 2) {
+        assert(r1.candidates[0].score >= r1.candidates[1].score, "candidates must be sorted desc by score");
+    }
+    for (const c of r1.candidates) {
+        assert(c.rangeLow < c.rangeHigh, "candidate range valid");
+        assert(c.leverage >= 1 && c.leverage <= CAPS.MAX_LEVERAGE, "candidate leverage valid");
+        assert(["conservative", "balanced", "aggressive"].includes(c.riskProfile), "candidate profile valid");
+        assert(c.fills >= 0, "fills non-negative");
+    }
+    // eslint-disable-next-line no-console
+    console.log(`  evaluated=${r1.totalEvaluated} top=${r1.candidates.length} bestScore=${r1.candidates[0]?.score ?? 0}`);
+});
+// 26. v1.2 — Optimize: too few candles returns empty result with warning.
+runTest("optimize: insufficient candles returns warning'd empty result", baseInput, () => {
+    const r = runOptimize({
+        coin: "BTC",
+        totalNotionalUsd: 300,
+        candles: baseInput.candles.slice(0, 50),
+        marketMeta: baseInput.marketMeta,
+        backtestWindowBars: 168,
+    });
+    assert(r.candidates.length === 0, "no candidates on insufficient candles");
+    assert(r.warnings.some((w) => w.startsWith("INPUT:") && w.includes("candles")), "expected INPUT warning");
+});
 // eslint-disable-next-line no-console
 console.log("\nAll self-tests passed ✅");

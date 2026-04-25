@@ -658,3 +658,236 @@ export function runBacktest(input) {
         warnings,
     };
 }
+// ---------------------------------------------------------------------------
+// `liqgrid quickstart` — zero-friction first-time use.
+// Given coin + notional + candles, derive sensible defaults for range,
+// leverage, and risk profile from the recent vol regime. Returns a complete
+// PlanInput the agent can pipe straight into `liqgrid plan`.
+//
+// Range geometry: mark ± k × σ_daily × √7 × profileWidth, intersected with
+// the recent local low/high to keep the range plausible vs current market.
+// k = 1.5 is "covers ~85% of expected 7-day excursions under log-normal"
+// — wide enough to fill, narrow enough to keep stop-loss within 30% cap.
+// ---------------------------------------------------------------------------
+const QUICKSTART_K = 1.5;
+const PROFILE_WIDTH = {
+    conservative: 0.8, // tighter range, denser fills
+    balanced: 1.0,
+    aggressive: 1.3, // wider range, more breathing room
+};
+const PROFILE_LEVERAGE = {
+    conservative: 2,
+    balanced: 3,
+    aggressive: 5,
+};
+export function runQuickstart(input) {
+    const warnings = [];
+    const profile = input.riskProfile ?? "conservative";
+    const windowBars = input.windowBars ?? 168;
+    // Validate
+    if (!input || !Array.isArray(input.candles) || input.candles.length < 24) {
+        return emptyQuickstartResult(input, profile, [
+            "INPUT: candles must have >= 24 entries for a stable vol estimate",
+        ]);
+    }
+    if (!input.marketMeta || typeof input.marketMeta.markPrice !== "number" || input.marketMeta.markPrice <= 0) {
+        return emptyQuickstartResult(input, profile, [
+            "INPUT: marketMeta.markPrice must be a positive number",
+        ]);
+    }
+    if (typeof input.totalNotionalUsd !== "number" || input.totalNotionalUsd <= 0) {
+        return emptyQuickstartResult(input, profile, [
+            "INPUT: totalNotionalUsd must be positive",
+        ]);
+    }
+    const window = input.candles.slice(-Math.min(windowBars, input.candles.length));
+    const mark = input.marketMeta.markPrice;
+    const sigmaDaily = realizedVolatilityDaily(window);
+    const localLow = Math.min(...window.map((c) => c.low));
+    const localHigh = Math.max(...window.map((c) => c.high));
+    // Volatility-derived half-width (in price units, geometric):
+    // half = mark × (exp(k × σ × √7 × profileWidth) − 1)
+    const halfWidthPct = Math.exp(QUICKSTART_K * sigmaDaily * Math.sqrt(7) * PROFILE_WIDTH[profile]) - 1;
+    let recLow = mark * (1 - halfWidthPct);
+    let recHigh = mark * (1 + halfWidthPct);
+    // Intersect with local low/high so we don't propose a range that's already
+    // been blown through in the last week — but not narrower than ±2% from mark
+    // to ensure enough room for at least 4 rungs.
+    const minHalf = mark * 0.02;
+    recLow = Math.max(recLow, localLow * 0.98); // small buffer
+    recHigh = Math.min(recHigh, localHigh * 1.02);
+    if (mark - recLow < minHalf)
+        recLow = mark - minHalf;
+    if (recHigh - mark < minHalf)
+        recHigh = mark + minHalf;
+    // Tick-align both ends.
+    const tick = input.marketMeta.tickSize > 0 ? input.marketMeta.tickSize : 1;
+    recLow = roundToTick(recLow, tick);
+    recHigh = roundToTick(recHigh, tick);
+    let leverage = PROFILE_LEVERAGE[profile];
+    // Respect Hyperliquid's per-instrument max leverage if present.
+    if (typeof input.marketMeta.maxLeverage === "number" && input.marketMeta.maxLeverage > 0) {
+        leverage = Math.min(leverage, input.marketMeta.maxLeverage);
+    }
+    leverage = Math.min(leverage, CAPS.MAX_LEVERAGE);
+    // Health checks
+    if (sigmaDaily > 0.08) {
+        warnings.push(`realized daily vol ${(sigmaDaily * 100).toFixed(1)}% is high; consider reducing notional or using conservative profile`);
+    }
+    if (mark < recLow || mark > recHigh) {
+        warnings.push("mark price outside recommended range — local-history clamp may be too tight");
+    }
+    const planInput = {
+        coin: input.coin,
+        rangeLow: recLow,
+        rangeHigh: recHigh,
+        totalNotionalUsd: input.totalNotionalUsd,
+        leverage,
+        riskProfile: profile,
+        marketMeta: input.marketMeta,
+        candles: window,
+    };
+    const rationale = `range = mark ± ${(halfWidthPct * 100).toFixed(1)}% (k=${QUICKSTART_K} × σ_daily=${(sigmaDaily * 100).toFixed(2)}% × √7 × profileWidth=${PROFILE_WIDTH[profile]}), ` +
+        `clamped to local 7d window [${localLow.toFixed(2)}, ${localHigh.toFixed(2)}]. ` +
+        `Leverage = profile default ${PROFILE_LEVERAGE[profile]}, capped at min(market max, hard cap 10x).`;
+    return {
+        coin: input.coin,
+        recommendedRangeLow: recLow,
+        recommendedRangeHigh: recHigh,
+        recommendedLeverage: leverage,
+        riskProfile: profile,
+        totalNotionalUsd: input.totalNotionalUsd,
+        markPrice: mark,
+        realizedDailyVol: Number(sigmaDaily.toFixed(4)),
+        windowBars: window.length,
+        localLow: Number(localLow.toFixed(8)),
+        localHigh: Number(localHigh.toFixed(8)),
+        rationale,
+        planInput,
+        warnings,
+    };
+}
+function emptyQuickstartResult(input, profile, warnings) {
+    return {
+        coin: typeof input?.coin === "string" ? input.coin : "",
+        recommendedRangeLow: 0,
+        recommendedRangeHigh: 0,
+        recommendedLeverage: 0,
+        riskProfile: profile,
+        totalNotionalUsd: 0,
+        markPrice: 0,
+        realizedDailyVol: 0,
+        windowBars: 0,
+        localLow: 0,
+        localHigh: 0,
+        rationale: "",
+        planInput: {
+            coin: "",
+            rangeLow: 0,
+            rangeHigh: 0,
+            totalNotionalUsd: 0,
+            leverage: 0,
+            riskProfile: profile,
+            marketMeta: { coin: "", tickSize: 0, minOrderSizeUsd: 0, markPrice: 0, maxLeverage: 0 },
+            candles: [],
+        },
+        warnings,
+    };
+}
+// ---------------------------------------------------------------------------
+// `liqgrid optimize` — deterministic parameter sweep over (range_width,
+// leverage, profile) combinations, ranked by a Calmar-style score:
+//   score = realizedPnlUsd / max(maxDrawdownUsd, 1)
+// Higher score = better realized return per unit drawdown.
+// Each candidate is evaluated by reusing `runBacktest`. The whole sweep is
+// pure compute with no network or randomness.
+// ---------------------------------------------------------------------------
+const OPTIMIZE_RANGE_WIDTH_PCTS = [0.03, 0.05, 0.08, 0.12, 0.18];
+const OPTIMIZE_LEVERAGES = [1, 2, 3, 5, 10];
+const OPTIMIZE_PROFILES = ["conservative", "balanced", "aggressive"];
+export function runOptimize(input) {
+    const warnings = [];
+    const topN = Math.max(1, Math.min(input.topN ?? 3, 10));
+    const backtestWindowBars = input.backtestWindowBars ?? 168;
+    if (!input || !Array.isArray(input.candles) || input.candles.length <= backtestWindowBars + 24) {
+        return {
+            coin: typeof input?.coin === "string" ? input.coin : "",
+            totalNotionalUsd: 0,
+            totalEvaluated: 0,
+            candidates: [],
+            warnings: [
+                `INPUT: candles must have > backtestWindowBars + 24 entries (got ${input?.candles?.length ?? 0}, need > ${backtestWindowBars + 24})`,
+            ],
+        };
+    }
+    if (!input.marketMeta || typeof input.marketMeta.markPrice !== "number" || input.marketMeta.markPrice <= 0) {
+        return {
+            coin: input.coin ?? "",
+            totalNotionalUsd: 0,
+            totalEvaluated: 0,
+            candidates: [],
+            warnings: ["INPUT: marketMeta.markPrice must be a positive number"],
+        };
+    }
+    const mark = input.marketMeta.markPrice;
+    const tick = input.marketMeta.tickSize > 0 ? input.marketMeta.tickSize : 1;
+    const candidates = [];
+    let evaluated = 0;
+    for (const widthPct of OPTIMIZE_RANGE_WIDTH_PCTS) {
+        for (const lev of OPTIMIZE_LEVERAGES) {
+            // Skip leverage above market max for cleanliness.
+            if (input.marketMeta.maxLeverage > 0 && lev > input.marketMeta.maxLeverage)
+                continue;
+            if (lev > CAPS.MAX_LEVERAGE)
+                continue;
+            for (const profile of OPTIMIZE_PROFILES) {
+                const halfWidth = mark * widthPct;
+                const rangeLow = roundToTick(mark - halfWidth, tick);
+                const rangeHigh = roundToTick(mark + halfWidth, tick);
+                if (rangeLow <= 0 || rangeLow >= rangeHigh)
+                    continue;
+                const btInput = {
+                    coin: input.coin,
+                    rangeLow,
+                    rangeHigh,
+                    totalNotionalUsd: input.totalNotionalUsd,
+                    leverage: lev,
+                    riskProfile: profile,
+                    marketMeta: input.marketMeta,
+                    candles: input.candles,
+                    backtestWindowBars,
+                };
+                const r = runBacktest(btInput);
+                evaluated++;
+                // Reject failed runs.
+                if (r.windowBars === 0 || r.gridCount === 0)
+                    continue;
+                const score = r.realizedPnlUsd / Math.max(r.maxDrawdownUsd, 1);
+                candidates.push({
+                    rangeLow,
+                    rangeHigh,
+                    leverage: lev,
+                    riskProfile: profile,
+                    rangeWidthPct: widthPct,
+                    realizedPnlUsd: r.realizedPnlUsd,
+                    maxDrawdownUsd: r.maxDrawdownUsd,
+                    fills: r.fills,
+                    hitStopLoss: r.hitStopLoss,
+                    score: Number(score.toFixed(4)),
+                });
+            }
+        }
+    }
+    candidates.sort((a, b) => b.score - a.score);
+    const top = candidates.slice(0, topN);
+    if (top.length === 0) {
+        warnings.push("no viable candidate found across the parameter sweep — try widening candles or notional");
+    }
+    return {
+        coin: input.coin,
+        totalNotionalUsd: input.totalNotionalUsd,
+        totalEvaluated: evaluated,
+        candidates: top,
+        warnings,
+    };
+}
