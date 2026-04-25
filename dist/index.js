@@ -1,41 +1,41 @@
 #!/usr/bin/env node
-// liqgrid CLI — deterministic grid-parameter engine for Hyperliquid perpetuals.
-// This binary is ORCHESTRATED BY the liqgrid Plugin Store Skill.
+// hyperliquid-aigrid CLI — deterministic grid-parameter engine for Hyperliquid perpetuals.
+// This binary is ORCHESTRATED BY the hyperliquid-aigrid Plugin Store Skill.
 // It does not place orders, does not handle keys, does not touch the network.
 // Its sole job is to compute a GridPlan from user inputs plus live market data
 // that the Skill fetches through the Hyperliquid basic plugin.
 //
 // Usage (JSON in, JSON out):
-//   liqgrid plan --input plan-input.json
-//   cat plan-input.json | liqgrid plan
-//   liqgrid --help
-//   liqgrid --version
-//   liqgrid caps
+//   hyperliquid-aigrid plan --input plan-input.json
+//   cat plan-input.json | hyperliquid-aigrid plan
+//   hyperliquid-aigrid --help
+//   hyperliquid-aigrid --version
+//   hyperliquid-aigrid caps
 import { readFileSync } from "node:fs";
 import { computeGridPlan, runBacktest, runQuickstart, runOptimize } from "./grid.js";
 import { CAPS } from "./types.js";
 const VERSION = "1.2.0";
 function printHelp() {
     // eslint-disable-next-line no-console
-    console.log(`liqgrid v${VERSION}
+    console.log(`hyperliquid-aigrid v${VERSION}
 
 Deterministic grid-parameter engine for Hyperliquid perpetuals.
-Called by the liqgrid Skill — not intended for direct human use.
+Called by the hyperliquid-aigrid Skill — not intended for direct human use.
 
 Usage:
-  liqgrid plan [--input <file>]       Compute a GridPlan from JSON input
-  liqgrid quickstart [--input <file>] Suggest defaults (range, leverage, profile)
+  hyperliquid-aigrid plan [--input <file>]       Compute a GridPlan from JSON input
+  hyperliquid-aigrid quickstart [--input <file>] Suggest defaults (range, leverage, profile)
                                        from coin + notional + candles
-  liqgrid optimize [--input <file>]   Sweep (range, leverage, profile) on
+  hyperliquid-aigrid optimize [--input <file>]   Sweep (range, leverage, profile) on
                                        historical candles, return top-N
-  liqgrid backtest [--input <file>]   Simulate a plan over historical candles
-  liqgrid explain [--input <file>]    Human-readable breakdown of a plan
-  liqgrid caps                        Emit hard-coded safety caps as JSON
-  liqgrid --help                      Show this help
-  liqgrid --version                   Print version
+  hyperliquid-aigrid backtest [--input <file>]   Simulate a plan over historical candles
+  hyperliquid-aigrid explain [--input <file>]    Human-readable breakdown of a plan
+  hyperliquid-aigrid caps                        Emit hard-coded safety caps as JSON
+  hyperliquid-aigrid --help                      Show this help
+  hyperliquid-aigrid --version                   Print version
 
 Note: plan accepts optional marketMeta.fundingRateHourly (hourly funding
-rate as a fraction). When provided and |annualized| >= 10%, liqgrid tilts
+rate as a fraction). When provided and |annualized| >= 10%, hyperliquid-aigrid tilts
 per-rung notional asymmetrically (up to ±20%) to collect funding as alpha.
 
 Input shape (JSON):
@@ -67,9 +67,9 @@ Minimal example you can paste into a shell:
       {"open":92000,"high":92600,"low":91800,"close":92300,"timestamp":0},
       {"open":92300,"high":92700,"low":92100,"close":92500,"timestamp":3600000}
     ]
-  }' | liqgrid plan
+  }' | hyperliquid-aigrid plan
 
-The liqgrid Skill is responsible for presenting the plan to the user and
+The hyperliquid-aigrid Skill is responsible for presenting the plan to the user and
 for executing any orders through the Hyperliquid basic plugin ONLY AFTER
 explicit user confirmation.
 `);
@@ -176,7 +176,7 @@ function main() {
                 return readStdinSync();
             })();
             if (!raw.trim()) {
-                throw new Error("explain needs a GridPlan JSON. Pipe the output of `liqgrid plan` into it.");
+                throw new Error("explain needs a GridPlan JSON. Pipe the output of `hyperliquid-aigrid plan` into it.");
             }
             const plan = parseJsonOrThrow(raw, "explain input");
             explainPlan(plan);
@@ -207,7 +207,7 @@ function explainPlan(plan) {
     ];
     for (const field of required) {
         if (plan[field] === undefined) {
-            throw new Error(`explain: input is not a GridPlan — missing field \`${field}\`. Pipe the output of \`liqgrid plan\` into \`liqgrid explain\`.`);
+            throw new Error(`explain: input is not a GridPlan — missing field \`${field}\`. Pipe the output of \`hyperliquid-aigrid plan\` into \`hyperliquid-aigrid explain\`.`);
         }
     }
     if (!Array.isArray(plan.levels)) {
@@ -231,7 +231,7 @@ function explainPlan(plan) {
     lines.push(`  ${plan.stopLossSide === "long" ? "below" : "above"} ${plan.stopLossTriggerPrice}`);
     lines.push(`  worst case loss at range break: $${plan.maxLossAtRangeBreakUsd.toFixed(2)} (${(plan.maxLossPctOfNotional * 100).toFixed(1)}% of notional)`);
     lines.push(``);
-    lines.push(`Liquidation buffer: ~${(plan.liquidationDistancePct * 100).toFixed(1)}% — liqgrid estimate only; Hyperliquid's risk engine is authoritative.`);
+    lines.push(`Liquidation buffer: ~${(plan.liquidationDistancePct * 100).toFixed(1)}% — hyperliquid-aigrid estimate only; Hyperliquid's risk engine is authoritative.`);
     lines.push(``);
     lines.push(`Expected fills/day: ${plan.expectedFillsPerDay} (based on ${(plan.realizedVolatilityDaily * 100).toFixed(2)}% realized daily vol)`);
     if (plan.warnings.length > 0) {
@@ -252,6 +252,6 @@ try {
 catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     // eslint-disable-next-line no-console
-    console.error(`liqgrid error: ${msg}`);
+    console.error(`hyperliquid-aigrid error: ${msg}`);
     process.exit(1);
 }

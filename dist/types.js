@@ -1,7 +1,7 @@
-// Shared types for the liqgrid parameter engine.
+// Shared types for the hyperliquid-aigrid parameter engine.
 // All types use explicit number ranges and string enums to keep the
 // grid computation deterministic across Node versions.
-// Hard caps — these are the safety boundaries for liqgrid v1.0.0.
+// Hard caps — these are the safety boundaries for hyperliquid-aigrid v1.0.0.
 // They match exactly what SKILL.md documents to the user.
 // Do not widen without a corresponding SKILL.md version bump.
 export const CAPS = {

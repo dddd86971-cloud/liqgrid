@@ -1,10 +1,10 @@
 {
-  "name": "liqgrid",
+  "name": "hyperliquid-aigrid",
   "version": "1.2.0",
-  "description": "Deterministic grid-parameter engine for Hyperliquid perpetuals. Powers the liqgrid Plugin Store Skill.",
+  "description": "Deterministic grid-parameter engine for Hyperliquid perpetuals. Powers the hyperliquid-aigrid Plugin Store Skill.",
   "type": "module",
   "bin": {
-    "liqgrid": "dist/index.js"
+    "hyperliquid-aigrid": "dist/index.js"
   },
   "files": [
     "dist"
@@ -27,7 +27,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dddd86971-cloud/liqgrid.git"
+    "url": "git+https://github.com/dddd86971-cloud/hyperliquid-aigrid.git"
   },
   "engines": {
     "node": ">=18.0.0"

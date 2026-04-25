@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to liqgrid are documented here.
+All notable changes to hyperliquid-aigrid are documented here.
 
 ## [1.2.0] — 2026-04-25
 
@@ -10,7 +10,7 @@ helpers.
 
 ### Added
 
-- **`liqgrid quickstart`** — zero-friction first-time use. Given just
+- **`hyperliquid-aigrid quickstart`** — zero-friction first-time use. Given just
   `coin`, `totalNotionalUsd`, `candles`, and `marketMeta`, the engine
   derives a sensible `(rangeLow, rangeHigh, leverage, riskProfile)` from
   the recent vol regime (mark ± 1.5 × σ_daily × √7 × profileWidth, then
@@ -18,7 +18,7 @@ helpers.
   current market). Returns a ready-to-pipe `PlanInput`. Implementation:
   `runQuickstart()` in `src/grid.ts`.
 
-- **`liqgrid optimize`** — deterministic parameter sweep. Iterates over
+- **`hyperliquid-aigrid optimize`** — deterministic parameter sweep. Iterates over
   5 range-widths × 5 leverages × 3 risk profiles = up to 75 combinations,
   runs `runBacktest` on each, ranks by a Calmar-style score
   (`realizedPnlUsd / max(maxDrawdownUsd, 1)`), and returns the top N.
@@ -61,7 +61,7 @@ byte-identical output; the output shape (`GridPlan`) is unchanged.
   v1.0-style uniform sizing. Implementation: `fillProbabilityWeight()` in
   `src/grid.ts`.
 
-- **`liqgrid backtest` subcommand.** New deterministic candle-by-candle
+- **`hyperliquid-aigrid backtest` subcommand.** New deterministic candle-by-candle
   simulation. Splits `candles` into history (vol estimate) + window
   (simulation), pairs buy fills to sell fills FIFO, reports `realizedPnlUsd`,
   `unrealizedPnlUsd`, `maxDrawdownUsd`, `sharpeApprox`, `hitStopLoss`.

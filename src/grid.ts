@@ -1,7 +1,7 @@
 // Deterministic grid-parameter engine.
 // Given the same inputs, produces the same GridPlan — across Node versions,
 // across machines, across runs. No Math.random, no Date.now, no I/O.
-// This determinism is the whole point of distributing liqgrid as a binary
+// This determinism is the whole point of distributing hyperliquid-aigrid as a binary
 // rather than leaving grid math to an LLM.
 
 import { createHash } from "node:crypto";
@@ -827,10 +827,10 @@ export function runBacktest(input: BacktestInput): BacktestResult {
 }
 
 // ---------------------------------------------------------------------------
-// `liqgrid quickstart` — zero-friction first-time use.
+// `hyperliquid-aigrid quickstart` — zero-friction first-time use.
 // Given coin + notional + candles, derive sensible defaults for range,
 // leverage, and risk profile from the recent vol regime. Returns a complete
-// PlanInput the agent can pipe straight into `liqgrid plan`.
+// PlanInput the agent can pipe straight into `hyperliquid-aigrid plan`.
 //
 // Range geometry: mark ± k × σ_daily × √7 × profileWidth, intersected with
 // the recent local low/high to keep the range plausible vs current market.
@@ -983,7 +983,7 @@ function emptyQuickstartResult(
 }
 
 // ---------------------------------------------------------------------------
-// `liqgrid optimize` — deterministic parameter sweep over (range_width,
+// `hyperliquid-aigrid optimize` — deterministic parameter sweep over (range_width,
 // leverage, profile) combinations, ranked by a Calmar-style score:
 //   score = realizedPnlUsd / max(maxDrawdownUsd, 1)
 // Higher score = better realized return per unit drawdown.

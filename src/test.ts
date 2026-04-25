@@ -1,4 +1,4 @@
-// Minimal self-test for the liqgrid binary.
+// Minimal self-test for the hyperliquid-aigrid binary.
 // Runs the grid computation on a realistic BTC scenario and checks invariants.
 // Run with: npm run build && npm test
 // No external framework — keeps the source repo dependency-free.
@@ -143,7 +143,7 @@ runTest("levels are tick-aligned", baseInput, (plan) => {
 
 // 7. Serialization hash stability — the core determinism contract.
 // Same PlanInput → same serialized bytes → same hash, across runs.
-// This is the property that justifies distributing liqgrid as a binary
+// This is the property that justifies distributing hyperliquid-aigrid as a binary
 // rather than leaving grid math to an LLM.
 import { createHash } from "node:crypto";
 function planHash(plan: unknown): string {

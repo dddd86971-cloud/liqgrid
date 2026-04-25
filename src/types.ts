@@ -1,4 +1,4 @@
-// Shared types for the liqgrid parameter engine.
+// Shared types for the hyperliquid-aigrid parameter engine.
 // All types use explicit number ranges and string enums to keep the
 // grid computation deterministic across Node versions.
 
@@ -19,7 +19,7 @@ export interface MarketMeta {
   markPrice: number;
   maxLeverage: number;
   // Optional: hourly funding rate as a fraction (e.g. 0.0001 = 1bp/hour ≈ 0.88% annualized).
-  // When provided, liqgrid tilts per-rung notional asymmetrically to collect funding
+  // When provided, hyperliquid-aigrid tilts per-rung notional asymmetrically to collect funding
   // as alpha — positive funding biases toward sell-side rungs, negative toward buy.
   // Omit / undefined / 0 disables the bias and the engine behaves symmetrically.
   fundingRateHourly?: number;
@@ -36,7 +36,7 @@ export interface PlanInput {
   candles: Candle[];
 }
 
-// Input to `liqgrid backtest`. Reuses PlanInput shape but adds a split: candles
+// Input to `hyperliquid-aigrid backtest`. Reuses PlanInput shape but adds a split: candles
 // before index (candles.length - backtestWindowBars) are used for vol estimate
 // (i.e. "what the engine would see when planning"), candles from that index
 // to the end are walked bar-by-bar to simulate fills against the grid.
@@ -44,7 +44,7 @@ export interface BacktestInput extends PlanInput {
   backtestWindowBars: number;
 }
 
-// Input to `liqgrid quickstart`. Minimal: coin + notional + candles. Engine
+// Input to `hyperliquid-aigrid quickstart`. Minimal: coin + notional + candles. Engine
 // suggests sensible (rangeLow, rangeHigh, leverage, riskProfile) defaults
 // from the recent vol regime so the user doesn't need to pick range manually.
 export interface QuickstartInput {
@@ -71,12 +71,12 @@ export interface QuickstartResult {
   localLow: number;
   localHigh: number;
   rationale: string;
-  // ready-to-pipe PlanInput so the agent can run `liqgrid plan` directly
+  // ready-to-pipe PlanInput so the agent can run `hyperliquid-aigrid plan` directly
   planInput: PlanInput;
   warnings: string[];
 }
 
-// Input to `liqgrid optimize`. Engine sweeps over a small grid of
+// Input to `hyperliquid-aigrid optimize`. Engine sweeps over a small grid of
 // (range_width_pct, leverage, riskProfile) combinations, runs `runBacktest`
 // on each, and ranks by a Calmar-style score (realizedPnl / max(maxDD, 1)).
 // Pure compute, deterministic, no network.
@@ -165,7 +165,7 @@ export interface GridPlan {
   planHash: string; // sha256 over (rounded) input params — stable identifier
 }
 
-// Hard caps — these are the safety boundaries for liqgrid v1.0.0.
+// Hard caps — these are the safety boundaries for hyperliquid-aigrid v1.0.0.
 // They match exactly what SKILL.md documents to the user.
 // Do not widen without a corresponding SKILL.md version bump.
 export const CAPS = {

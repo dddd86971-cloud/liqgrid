@@ -1,9 +1,9 @@
-# liqgrid
+# hyperliquid-aigrid
 
 Deterministic grid-parameter engine for Hyperliquid perpetuals. Powers the
-[`liqgrid`](https://github.com/okx/plugin-store) Plugin Store Skill.
+[`hyperliquid-aigrid`](https://github.com/okx/plugin-store) Plugin Store Skill.
 
-This CLI is **orchestrated by the `liqgrid` Skill**, not intended for direct
+This CLI is **orchestrated by the `hyperliquid-aigrid` Skill**, not intended for direct
 human use. It accepts JSON inputs (market meta + candles + user parameters),
 returns a deterministic `GridPlan` JSON. It does **not** place orders, handle
 private keys, or make network calls.
@@ -14,11 +14,11 @@ private keys, or make network calls.
 User (natural language)
   │
   ▼
-liqgrid Skill (SKILL.md, lives in okx/plugin-store)
+hyperliquid-aigrid Skill (SKILL.md, lives in okx/plugin-store)
   │
   ├── hyperliquid-plugin   (fetches mark / funding / 1h candles, signs TX)
   │
-  └── liqgrid binary       ◄── this repo
+  └── hyperliquid-aigrid binary       ◄── this repo
        ├─ plan      → compute grid levels, stop-loss, expected PnL
        ├─ backtest  → simulate plan over historical candles
        ├─ explain   → human-readable breakdown of a plan JSON
@@ -41,7 +41,7 @@ guarantees reproducibility.
 - **Concentrated-liquidity rung sizing**: each rung's `sizeUsd` is weighted
   by its Gaussian fill-probability in log-price space. Near-mark rungs get
   more capital, edge rungs less. `sum(sizeUsd) == totalNotionalUsd` invariant.
-- **`liqgrid backtest`** subcommand: candle-by-candle simulation with FIFO
+- **`hyperliquid-aigrid backtest`** subcommand: candle-by-candle simulation with FIFO
   buy-to-sell pairing, realized + unrealized PnL, max drawdown, Sharpe
   approximation, stop-loss trigger detection.
 
@@ -57,12 +57,12 @@ node dist/index.js --help
 ## CLI
 
 ```bash
-liqgrid plan      --input plan.json       # compute a GridPlan
-liqgrid backtest  --input backtest.json   # simulate over historical candles
-liqgrid explain   --input plan.json       # human-readable plan breakdown
-liqgrid caps                              # emit hard-coded safety caps
-liqgrid --help
-liqgrid --version
+hyperliquid-aigrid plan      --input plan.json       # compute a GridPlan
+hyperliquid-aigrid backtest  --input backtest.json   # simulate over historical candles
+hyperliquid-aigrid explain   --input plan.json       # human-readable plan breakdown
+hyperliquid-aigrid caps                              # emit hard-coded safety caps
+hyperliquid-aigrid --help
+hyperliquid-aigrid --version
 ```
 
 Input JSON shape (matches `src/types.ts:PlanInput`):
@@ -104,7 +104,7 @@ and a stable `planHash`.
 | Max loss at range break | 30% of notional |
 
 Inputs above these caps are clamped silently and a warning is added to the
-plan. The `liqgrid` Skill surfaces these warnings to the user before any
+plan. The `hyperliquid-aigrid` Skill surfaces these warnings to the user before any
 order is placed.
 
 ## Determinism
