@@ -165,7 +165,7 @@ export interface GridPlan {
   planHash: string; // sha256 over (rounded) input params — stable identifier
 }
 
-// Hard caps — these are the safety boundaries for hyperliquid-aigrid v1.0.0.
+// Hard caps — these are the safety boundaries for hyperliquid-aigrid.
 // They match exactly what SKILL.md documents to the user.
 // Do not widen without a corresponding SKILL.md version bump.
 export const CAPS = {

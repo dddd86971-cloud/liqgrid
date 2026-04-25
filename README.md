@@ -33,7 +33,20 @@ Pure Skill-markdown implementations leave the math to the LLM and drift call
 to call. A compiled binary with a stable `planHash` SHA-256 fingerprint
 guarantees reproducibility.
 
-## v1.1.0 highlights
+## What's new
+
+### v1.2.0 (current)
+
+- **`hyperliquid-aigrid quickstart`** — zero-friction first-time use. Given
+  just `coin`, `totalNotionalUsd`, `candles`, and `marketMeta`, the engine
+  derives sensible `(rangeLow, rangeHigh, leverage, riskProfile)` and
+  returns a ready-to-pipe `PlanInput`.
+- **`hyperliquid-aigrid optimize`** — deterministic sweep over 5 range-widths
+  × 5 leverages × 3 profiles (75 combinations). Each candidate runs through
+  `runBacktest`, ranked by Calmar score (`realizedPnl / max(maxDD, 1)`),
+  returns the top N.
+
+### v1.1.0
 
 - **Funding-aware asymmetric sizing**: when `marketMeta.fundingRateHourly` is
   provided, per-rung notional tilts up to ±20% to collect funding as alpha.
@@ -41,8 +54,8 @@ guarantees reproducibility.
 - **Concentrated-liquidity rung sizing**: each rung's `sizeUsd` is weighted
   by its Gaussian fill-probability in log-price space. Near-mark rungs get
   more capital, edge rungs less. `sum(sizeUsd) == totalNotionalUsd` invariant.
-- **`hyperliquid-aigrid backtest`** subcommand: candle-by-candle simulation with FIFO
-  buy-to-sell pairing, realized + unrealized PnL, max drawdown, Sharpe
+- **`hyperliquid-aigrid backtest`** subcommand: candle-by-candle simulation with
+  FIFO buy-to-sell pairing, realized + unrealized PnL, max drawdown, Sharpe
   approximation, stop-loss trigger detection.
 
 ## Install (local development)
@@ -50,7 +63,7 @@ guarantees reproducibility.
 ```bash
 npm install
 npm run build
-node dist/test.js       # 26 self-tests
+node dist/test.js       # 30 self-tests
 node dist/index.js --help
 ```
 
@@ -123,7 +136,7 @@ deterministic and produces valid result`).
 npm test
 ```
 
-26 invariants covering:
+30 invariants covering:
 
 - Baseline plan correctness (risk profiles, gridCount, level tick alignment)
 - Determinism (JSON serialization + planHash stability across runs)
@@ -133,6 +146,9 @@ npm test
 - v1.1 funding bias (noise floor, sign, saturation at ±20%)
 - v1.1 concentrated liquidity (center-heavy sizing invariant)
 - v1.1 backtest (determinism + valid numeric outputs + input validation)
+- v1.2 quickstart (downstream-valid `PlanInput`, candle-count validation)
+- v1.2 optimize (75-combo sweep determinism, top-N ranking invariant,
+  `realizedPnl / max(maxDD, 1)` Calmar-style score)
 
 ## License
 
