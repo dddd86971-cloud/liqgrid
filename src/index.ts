@@ -18,7 +18,7 @@ import { computeGridPlan, runBacktest, runQuickstart, runOptimize } from "./grid
 import type { PlanInput, BacktestInput, QuickstartInput, OptimizeInput } from "./types.js";
 import { CAPS } from "./types.js";
 
-const VERSION = "1.2.4";
+const VERSION = "1.2.5";
 
 function printHelp(): void {
   // eslint-disable-next-line no-console

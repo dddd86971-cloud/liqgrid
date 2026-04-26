@@ -2,6 +2,43 @@
 
 All notable changes to hyperliquid-aigrid are documented here.
 
+## [1.2.5] — 2026-04-26
+
+### Added (Skill orchestration layer — SKILL.md only, no binary changes)
+
+- **`grid-cancel-rung` command** — cancel ONE specific rung from an
+  active grid via natural language ("撤掉最下面那个 buy" / "cancel the
+  $77,608 rung" / "drop the closest sell"). The Skill resolves the
+  reference to a specific `oid` using a documented disambiguation
+  table (lowest / highest / closest-to-mid / by-price), and asks for
+  clarification when ambiguous instead of guessing.
+- **`grid-roll` command** — atomically re-center an active grid
+  around the current mark. Internally orchestrates `grid-close` +
+  fresh `grid-quickstart` (using v1.2.3 notional-aware geometry) +
+  `grid-open`, with safety rules so the state never gets inconsistent:
+  - Refuses if the existing position would be liquidated by the new
+    range.
+  - Refuses if any old rungs fail to cancel before new ones are placed.
+  - Surfaces the proposed roll (side-by-side old vs. new) for one-shot
+    user confirmation, instead of three separate prompts.
+  - Optionally flattens the position first if the user says
+    "roll + flatten".
+
+### Notes
+
+- **No binary changes.** `package.json` / `dist/` / `src/grid.ts` /
+  `src/types.ts` / `src/test.ts` are byte-identical to v1.2.4. Only
+  `version` bumped; `plan()` / `quickstart()` / `runBacktest()` /
+  `runOptimize()` semantics unchanged. `planHash` is the same for
+  the same input across v1.2.4 → v1.2.5.
+- Self-tests: 45 (unchanged).
+- These commands are *Skill-side orchestration* — they call existing
+  `hyperliquid-plugin` and `hyperliquid-aigrid` operations with
+  documented choreography. The decision to keep them as
+  documentation-only (rather than baking into the binary) is
+  deliberate: the binary stays pure compute, and the agent layer
+  handles user-intent disambiguation where it belongs.
+
 ## [1.2.4] — 2026-04-26
 
 ### Added
