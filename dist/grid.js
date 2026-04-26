@@ -320,6 +320,10 @@ export function computeGridPlan(input) {
             buySideNotionalUsd: 0,
             sellSideNotionalUsd: 0,
             rangeWidthPct: 0,
+            avgRungGapPct: 0,
+            expectedFeePerRoundtripUsd: 0,
+            breakEvenGapPct: 0,
+            feeAwareNetEdgePerRoundtripUsd: 0,
             dryRun: true,
             warnings: structuralProblems.map((p) => `INPUT: ${p}`),
             planHash: "",
@@ -491,6 +495,41 @@ export function computeGridPlan(input) {
         const suggestedHalfWidthPct = Math.max(vol * 2, 0.005); // floor at ±0.5%
         warnings.push(`expected fills/day < 1 — grid will be inactive at current vol (${(vol * 100).toFixed(2)}% daily) over a ${(rangeWidthPct * 100).toFixed(1)}% range. Tighten range to ±${(suggestedHalfWidthPct * 100).toFixed(1)}% of mark, or wait for higher volatility.`);
     }
+    // v1.2.4: fee-aware economics. Defaults match Hyperliquid tier-0:
+    // maker 1.5 bps, taker 4.5 bps. Roundtrip fee assumes maker on both legs
+    // (the realistic case for limit grid orders that rest in book — confirmed
+    // on live HL fills with `crossed: false` carrying fee = 0.015%).
+    const feeRateMaker = typeof input.marketMeta.feeRateMaker === "number" && input.marketMeta.feeRateMaker >= 0
+        ? input.marketMeta.feeRateMaker
+        : 0.00015;
+    const feeRateTaker = typeof input.marketMeta.feeRateTaker === "number" && input.marketMeta.feeRateTaker >= 0
+        ? input.marketMeta.feeRateTaker
+        : 0.00045;
+    // Average per-rung notional (post-fallback / post-funding-tilt, in USD).
+    // Each leg's fee ≈ rungNotional × leverage × feeRate; roundtrip = 2× that.
+    const avgRungNotionalUsd = levels.length > 0
+        ? (notional / levels.length) * leverage
+        : 0;
+    const expectedFeePerRoundtripUsd = 2 * avgRungNotionalUsd * feeRateMaker;
+    // Average gap between adjacent rungs as a fraction of mark — for a
+    // log-spaced N-rung grid this is approximately rangeWidthPct / (N - 1).
+    const avgRungGapPct = levels.length > 1
+        ? rangeWidthPct / (levels.length - 1)
+        : 0;
+    // Gross USD captured by ONE roundtrip = avgRungNotionalUsd × avgRungGapPct.
+    // Break-even is the gap that exactly pays the roundtrip fee — below this,
+    // the grid is net-negative even at perfect maker fills. Solving
+    // notional × gapPct = 2 × notional × feeRate  =>  gapPct = 2 × feeRate.
+    const breakEvenGapPct = 2 * feeRateMaker;
+    const grossPerRoundtripUsd = avgRungNotionalUsd * avgRungGapPct;
+    const feeAwareNetEdgePerRoundtripUsd = grossPerRoundtripUsd - expectedFeePerRoundtripUsd;
+    if (levels.length > 0 &&
+        avgRungGapPct > 0 &&
+        avgRungGapPct < 2 * breakEvenGapPct) {
+        // Gap < 2× break-even = fee eats > 50% of gross profit. Warn so the
+        // user widens the range or accepts that fees will dominate returns.
+        warnings.push(`rung gap ${(avgRungGapPct * 100).toFixed(3)}% is within 2× break-even (${(breakEvenGapPct * 100).toFixed(3)}%) — maker fees will eat ≥ ${((expectedFeePerRoundtripUsd / Math.max(grossPerRoundtripUsd, 1e-9)) * 100).toFixed(0)}% of gross profit per roundtrip. Widen range or accept that fees dominate returns.`);
+    }
     return {
         coin: input.coin,
         gridCount: levels.length,
@@ -511,6 +550,10 @@ export function computeGridPlan(input) {
         buySideNotionalUsd: Number(buySideNotionalUsd.toFixed(4)),
         sellSideNotionalUsd: Number(sellSideNotionalUsd.toFixed(4)),
         rangeWidthPct: Number(rangeWidthPct.toFixed(6)),
+        avgRungGapPct: Number(avgRungGapPct.toFixed(6)),
+        expectedFeePerRoundtripUsd: Number(expectedFeePerRoundtripUsd.toFixed(6)),
+        breakEvenGapPct: Number(breakEvenGapPct.toFixed(6)),
+        feeAwareNetEdgePerRoundtripUsd: Number(feeAwareNetEdgePerRoundtripUsd.toFixed(6)),
         dryRun: true,
         warnings,
         planHash,

@@ -720,5 +720,101 @@ runTest("v1.2.3 quickstart: tiny notional emits min-order warning", baseInput, (
   );
 });
 
+// 38. v1.2.4 — Plan exposes fee-aware fields with sensible HL defaults.
+// MarketMeta without feeRateMaker/Taker should default to 1.5 bps / 4.5 bps
+// (Hyperliquid tier-0). Roundtrip fee = 2 × rungNotional × leverage × maker.
+runTest("v1.2.4: plan exposes fee-aware fields with HL defaults", baseInput, () => {
+  const plan = computeGridPlan(baseInput);
+  assert(typeof plan.avgRungGapPct === "number", "avgRungGapPct must be a number");
+  assert(typeof plan.expectedFeePerRoundtripUsd === "number", "expectedFeePerRoundtripUsd must be a number");
+  assert(typeof plan.breakEvenGapPct === "number", "breakEvenGapPct must be a number");
+  assert(typeof plan.feeAwareNetEdgePerRoundtripUsd === "number", "feeAwareNetEdgePerRoundtripUsd must be a number");
+  // breakEven = 2 × maker = 2 × 0.00015 = 0.0003 (3 bps).
+  assert(
+    Math.abs(plan.breakEvenGapPct - 0.0003) < 1e-6,
+    `default breakEvenGapPct should be 3 bps (2 × 1.5 bps maker), got ${plan.breakEvenGapPct}`
+  );
+  // avgRungGapPct ≈ rangeWidthPct / (gridCount - 1)
+  if (plan.gridCount > 1) {
+    const expectedGap = plan.rangeWidthPct / (plan.gridCount - 1);
+    assert(
+      Math.abs(plan.avgRungGapPct - expectedGap) < 1e-5,
+      `avgRungGapPct ${plan.avgRungGapPct} should equal rangeWidthPct/(N-1) = ${expectedGap}`
+    );
+  }
+});
+
+// 39. v1.2.4 — User can override fee rates via marketMeta (e.g. for VIP tier
+// or fee-free venues). breakEvenGapPct must reflect the override.
+runTest("v1.2.4: marketMeta.feeRateMaker overrides default; breakEven scales", baseInput, () => {
+  // Fee-free venue: breakEven should be 0
+  const free = {
+    ...baseInput,
+    marketMeta: { ...baseInput.marketMeta, feeRateMaker: 0, feeRateTaker: 0 },
+  };
+  const planFree = computeGridPlan(free);
+  assert(
+    planFree.breakEvenGapPct === 0,
+    `feeRateMaker=0 should yield breakEvenGapPct=0, got ${planFree.breakEvenGapPct}`
+  );
+  assert(
+    planFree.expectedFeePerRoundtripUsd === 0,
+    `feeRateMaker=0 should yield zero roundtrip fee`
+  );
+  // High-fee venue: breakEven scales linearly
+  const expensive = {
+    ...baseInput,
+    marketMeta: { ...baseInput.marketMeta, feeRateMaker: 0.001 }, // 10 bps
+  };
+  const planExp = computeGridPlan(expensive);
+  assert(
+    Math.abs(planExp.breakEvenGapPct - 0.002) < 1e-6,
+    `feeRateMaker=0.001 should yield breakEvenGapPct=0.002 (20 bps), got ${planExp.breakEvenGapPct}`
+  );
+});
+
+// 40. v1.2.4 — Net edge per roundtrip = gross - fee.
+// gross = avgRungNotional × avgRungGapPct (the price excursion captured per
+// roundtrip); fee = expectedFeePerRoundtripUsd. Verify the relationship.
+runTest("v1.2.4: feeAwareNetEdge = gross - expectedFee", baseInput, () => {
+  const plan = computeGridPlan(baseInput);
+  if (plan.gridCount > 1 && plan.totalNotionalUsd > 0) {
+    const avgRungNotional =
+      (plan.totalNotionalUsd / plan.gridCount) * plan.leverage;
+    const gross = avgRungNotional * plan.avgRungGapPct;
+    const expectedNet = gross - plan.expectedFeePerRoundtripUsd;
+    assert(
+      Math.abs(plan.feeAwareNetEdgePerRoundtripUsd - expectedNet) < 1e-4,
+      `feeAwareNetEdge ${plan.feeAwareNetEdgePerRoundtripUsd} should equal gross - fee = ${expectedNet}`
+    );
+  }
+});
+
+// 41. v1.2.4 — Fee-erosion warning fires when gap is within 2× breakEven.
+// At 1.5 bps maker (default), breakEven=3 bps. Warning threshold: 2× = 6 bps.
+// Reproduce by making gridCount large vs range so each gap < 6 bps.
+runTest("v1.2.4: fee-erosion warning fires when gap < 2x breakEven", baseInput, () => {
+  // Tight range, many rungs forced → small gap. baseInput has 7 rungs over
+  // range 90k–95k → gap ~0.92% (way above breakEven). To trigger, force
+  // rangeLow/High very close.
+  const tight = {
+    ...baseInput,
+    rangeLow: 92000,
+    rangeHigh: 92020, // 0.022% range — gap ≈ 0.0036% per rung at 7 rungs
+  };
+  const plan = computeGridPlan(tight);
+  if (plan.gridCount > 1 && plan.avgRungGapPct < 2 * plan.breakEvenGapPct) {
+    const feeWarning = plan.warnings.find((w) => w.includes("within 2× break-even"));
+    assert(
+      feeWarning !== undefined,
+      `expected fee-erosion warning when gap=${(plan.avgRungGapPct * 100).toFixed(4)}% < 2×breakEven=${(2 * plan.breakEvenGapPct * 100).toFixed(4)}%`
+    );
+    assert(
+      feeWarning!.includes("Widen range"),
+      `warning should suggest widening range, got: ${feeWarning}`
+    );
+  }
+});
+
 // eslint-disable-next-line no-console
 console.log("\nAll self-tests passed ✅");

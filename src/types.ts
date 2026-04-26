@@ -23,6 +23,14 @@ export interface MarketMeta {
   // as alpha — positive funding biases toward sell-side rungs, negative toward buy.
   // Omit / undefined / 0 disables the bias and the engine behaves symmetrically.
   fundingRateHourly?: number;
+  // v1.2.4 — Optional per-side fee rates as fractions of notional. When provided
+  // (or defaulted), the plan reports `expectedFeePerRoundtripUsd` and
+  // `breakEvenGapPct` so the caller can judge whether the configured rung gap
+  // is wide enough to be net-profitable. Defaults match Hyperliquid tier-0:
+  // maker 0.00015 (1.5 bps), taker 0.00045 (4.5 bps). Pass 0 / 0 to model a
+  // fee-free venue.
+  feeRateMaker?: number;
+  feeRateTaker?: number;
 }
 
 export interface PlanInput {
@@ -169,6 +177,16 @@ export interface GridPlan {
   // Useful for client-side "is this grid sane" checks; matches the same
   // metric reported on each OptimizeCandidate.
   rangeWidthPct: number;
+  // v1.2.4: fee-aware economics. avgRungGapPct is the average geometric gap
+  // between adjacent same-side rungs (≈ rangeWidthPct / (gridCount - 1) for
+  // log-spaced grids). expectedFeePerRoundtripUsd is the round-trip fee for
+  // ONE rung (one buy + one sell at the configured maker/taker mix). breakEven
+  // GapPct is the gap below which fee >= gross profit. feeAwareNetEdgePerRoundtrip
+  // Usd is the per-rung net (gross - fee) at the current gap.
+  avgRungGapPct: number;
+  expectedFeePerRoundtripUsd: number;
+  breakEvenGapPct: number;
+  feeAwareNetEdgePerRoundtripUsd: number;
   dryRun: true;
   warnings: string[];
   planHash: string; // sha256 over (rounded) input params — stable identifier

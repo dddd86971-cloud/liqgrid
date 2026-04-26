@@ -2,6 +2,44 @@
 
 All notable changes to hyperliquid-aigrid are documented here.
 
+## [1.2.4] — 2026-04-26
+
+### Added
+
+- **Fee-aware plan output** — driven by direct observation on live HL
+  fills (`crossed: false` carrying fee = 1.5 bps = $0.0019 on a $11.69
+  notional). Pre-v1.2.4 the plan reported `expectedFillsPerDay` but
+  not what each fill actually netted after fees, leaving users guessing
+  whether their grid was profitable. Four new fields:
+  - `avgRungGapPct` — average geometric gap between adjacent same-side
+    rungs (≈ `rangeWidthPct / (gridCount - 1)`).
+  - `expectedFeePerRoundtripUsd` — round-trip fee for ONE rung pair
+    (`2 × rungNotional × leverage × feeRateMaker`).
+  - `breakEvenGapPct` — the gap below which fees swallow gross profit.
+    For HL tier-0 maker (1.5 bps), this is 3 bps.
+  - `feeAwareNetEdgePerRoundtripUsd` — gross excursion captured per
+    roundtrip minus the round-trip fee.
+- **`MarketMeta.feeRateMaker` / `feeRateTaker`** (optional). Defaults
+  match Hyperliquid tier-0: maker 1.5 bps (0.00015), taker 4.5 bps
+  (0.00045). Users on higher tiers / fee-free venues can override.
+- **Fee-erosion warning** — fires when `avgRungGapPct < 2 × breakEvenGapPct`.
+  At that point fees eat ≥ 50% of gross profit per roundtrip — the user
+  should either widen the range or accept that fees dominate returns.
+- **Self-tests: 41 → 45.** New cases: fee fields with HL defaults;
+  user-overridden fee rate scales `breakEvenGapPct`; net edge =
+  gross − expected fee; fee-erosion warning fires below 2× break-even.
+
+### Notes
+
+- **`planHash` unchanged** for the same input bytes. Like v1.2.2 / v1.2.3,
+  the new fields are derived (not in the hashable spec). v1.2.3 → v1.2.4
+  is purely additive output extension.
+- **Real-world calibration.** The 1.5 bps default came from a live
+  $24-account 4-rung grid placed during PR-#360 testing: a
+  `crossed: false` (maker) buy fill of 0.00016 BTC at $77,822 carried
+  fee $0.001867 USDC, which is 1.5 bps of $12.45 notional. Matches HL's
+  published tier-0 maker schedule.
+
 ## [1.2.3] — 2026-04-26
 
 ### Changed
