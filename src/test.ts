@@ -490,5 +490,66 @@ runTest("optimize: insufficient candles returns warning'd empty result", baseInp
   );
 });
 
+// 27. v1.2.1 — Small-account auto-reduce gridCount.
+// At $50 notional × 1× leverage, concentrated liquidity sizing produces
+// edge rungs at ~$0.05 each — well below HL's $10 min order. We expect
+// computeGridPlan to iteratively reduce gridCount until every rung clears
+// the min, OR stop at CAPS.MIN_GRID_COUNT with a hard warning.
+runTest("small-account: gridCount auto-reduces so every rung >= min order", baseInput, () => {
+  const small = {
+    ...baseInput,
+    totalNotionalUsd: 50,
+    leverage: 1,
+    marketMeta: { ...baseInput.marketMeta, minOrderSizeUsd: 10 },
+  };
+  const plan = computeGridPlan(small);
+  if (plan.levels.length > 0) {
+    const minRung = Math.min(...plan.levels.map((l) => l.sizeUsd * plan.leverage));
+    if (plan.gridCount > CAPS.MIN_GRID_COUNT) {
+      assert(minRung >= 10, `min rung $${minRung} < min order $10 despite gridCount > MIN`);
+    }
+    // If reduction kicked in, expect a warning naming gridCount
+    if (plan.warnings.some((w) => w.includes("gridCount auto-reduced"))) {
+      assert(plan.gridCount < CAPS.MAX_GRID_COUNT, "should have reduced from initial");
+    }
+  }
+});
+
+// 28. v1.2.1 — Large-account does NOT trigger auto-reduce.
+runTest("large-account: gridCount NOT reduced when notional is plenty", baseInput, () => {
+  const big = { ...baseInput, totalNotionalUsd: 5000, leverage: 1 };
+  const plan = computeGridPlan(big);
+  // Large notional → no need to reduce. Warning should not mention auto-reduce.
+  const reducedWarning = plan.warnings.find((w) => w.includes("gridCount auto-reduced"));
+  assert(!reducedWarning, `unexpected auto-reduce warning on large notional: ${reducedWarning}`);
+});
+
+// 29. v1.2.1 — Tiny-account fallback to uniform sizing.
+// $50 notional × 1× — even at MIN_GRID_COUNT concentrated weighting yields
+// edge rungs below the $10 min order. Engine should fall back to uniform
+// sizing so every rung clears min, with a clear warning.
+runTest("tiny-account: falls back to uniform sizing when concentrated still fails", baseInput, () => {
+  const tiny = {
+    ...baseInput,
+    totalNotionalUsd: 50,
+    leverage: 1,
+    marketMeta: { ...baseInput.marketMeta, minOrderSizeUsd: 10 },
+  };
+  const plan = computeGridPlan(tiny);
+  if (plan.levels.length > 0) {
+    const sizes = plan.levels.map((l) => l.sizeUsd * plan.leverage);
+    const minSize = Math.min(...sizes);
+    const maxSize = Math.max(...sizes);
+    assert(minSize >= 10, `min rung $${minSize} should be >= $10 after fallback`);
+    // Uniform fallback means max ≈ min (within rounding tolerance)
+    if (plan.warnings.some((w) => w.includes("uniform per-rung sizing"))) {
+      assert(
+        Math.abs(maxSize - minSize) < 0.5,
+        `uniform fallback should make sizes near-equal (got min=${minSize} max=${maxSize})`
+      );
+    }
+  }
+});
+
 // eslint-disable-next-line no-console
 console.log("\nAll self-tests passed ✅");

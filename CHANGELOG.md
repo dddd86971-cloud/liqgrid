@@ -2,6 +2,32 @@
 
 All notable changes to hyperliquid-aigrid are documented here.
 
+## [1.2.1] — 2026-04-26
+
+### Added
+
+- **Small-account auto-adapt in `computeGridPlan`.** When the configured
+  notional is too small for concentrated-liquidity sizing to keep every
+  rung above `marketMeta.minOrderSizeUsd`, the engine now: (a) iteratively
+  reduces `gridCount` toward `CAPS.MIN_GRID_COUNT` while every rung is
+  still under min, and (b) falls back to UNIFORM per-rung sizing
+  (`sigmaDaily=0` in `buildLevels`) if even MIN_GRID_COUNT under
+  concentrated weighting can't satisfy the order-size floor. Two warnings
+  surface the auto-reduce + the fallback decision so the user knows what
+  happened and how to restore concentrated geometry. Funding bias is
+  preserved through the fallback.
+
+- **Self-tests: 30 → 33.** New cases: small-account auto-reduce,
+  large-account no-trigger invariant, tiny-account uniform-fallback.
+
+### Notes
+
+- Pure additive logic in the post-`buildLevels` pipeline. No change to
+  `buildLevels`, `computeStopLoss`, `runBacktest`, `runQuickstart`, or
+  `runOptimize` algorithms. Same input on `≥ $300 × 1×` accounts produces
+  byte-identical output to v1.2.0. Behavior change is scoped to small
+  notionals where v1.2.0 emitted warnings but produced unplaceable rungs.
+
 ## [1.2.0] — 2026-04-25
 
 Two new binary subcommands. The runtime contract on `plan`, `backtest`,

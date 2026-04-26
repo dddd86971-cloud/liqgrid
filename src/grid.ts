@@ -510,10 +510,15 @@ export function computeGridPlan(input: PlanInput): GridPlan {
       `funding-aware bias applied: ${annualPct}% annualized funding → ${(Math.abs(fundingBias) * 100).toFixed(1)}% notional tilt toward ${sidePref} rungs`
     );
   }
-  const levels = buildLevels(
+  // Build levels with concentrated weighting. For small notionals,
+  // concentration can produce edge rungs below market min order size; in that
+  // case we iteratively reduce gridCount until every surviving rung clears
+  // the min, or we hit MIN_GRID_COUNT (which then emits a hard warning).
+  let actualGridCount = gridCount;
+  let levels = buildLevels(
     input.rangeLow,
     input.rangeHigh,
-    gridCount,
+    actualGridCount,
     input.marketMeta.markPrice,
     notional,
     input.marketMeta.tickSize,
@@ -521,6 +526,55 @@ export function computeGridPlan(input: PlanInput): GridPlan {
     vol,
     fundingBias
   );
+  const minOrder = input.marketMeta.minOrderSizeUsd;
+  if (minOrder > 0) {
+    while (
+      actualGridCount > CAPS.MIN_GRID_COUNT &&
+      levels.length > 0 &&
+      Math.min(...levels.map((l) => l.sizeUsd * leverage)) < minOrder
+    ) {
+      actualGridCount -= 1;
+      levels = buildLevels(
+        input.rangeLow,
+        input.rangeHigh,
+        actualGridCount,
+        input.marketMeta.markPrice,
+        notional,
+        input.marketMeta.tickSize,
+        leverage,
+        vol,
+        fundingBias
+      );
+    }
+    if (actualGridCount < gridCount) {
+      warnings.push(
+        `gridCount auto-reduced from ${gridCount} to ${actualGridCount} so every rung clears market min order ($${minOrder}). To restore density, increase totalNotionalUsd or leverage.`
+      );
+    }
+    // Even at MIN_GRID_COUNT, concentrated weighting can leave edge rungs
+    // below min for very small notionals. Fall back to UNIFORM sizing
+    // (sigmaDaily=0 in buildLevels turns off concentration) to maximize the
+    // per-rung floor at the cost of giving up center-heavy concentration.
+    if (
+      levels.length > 0 &&
+      Math.min(...levels.map((l) => l.sizeUsd * leverage)) < minOrder
+    ) {
+      levels = buildLevels(
+        input.rangeLow,
+        input.rangeHigh,
+        actualGridCount,
+        input.marketMeta.markPrice,
+        notional,
+        input.marketMeta.tickSize,
+        leverage,
+        0, // sigmaDaily=0 → uniform sizing fallback
+        fundingBias // keep funding bias even in fallback
+      );
+      warnings.push(
+        `notional ($${notional}) too small for concentrated-liquidity sizing at min order $${minOrder} — fell back to uniform per-rung sizing. Consider increasing totalNotionalUsd to ≥ $${Math.ceil(minOrder * actualGridCount * 2.5 / leverage)} for full concentrated-liquidity behavior.`
+      );
+    }
+  }
 
   const { triggerPrice, side, maxLossUsd } = computeStopLoss(
     input.rangeLow,
