@@ -160,6 +160,15 @@ export interface GridPlan {
   liquidationDistancePct: number;
   expectedFillsPerDay: number;
   realizedVolatilityDaily: number;
+  // v1.2.2: per-side notional aggregates so callers can verify funding-bias
+  // tilt directly from plan output (without summing levels[] themselves).
+  // Sum of buy-rung sizeUsd and sell-rung sizeUsd respectively.
+  buySideNotionalUsd: number;
+  sellSideNotionalUsd: number;
+  // v1.2.2: rangeWidth as a fraction of mark price ((rangeHigh - rangeLow) / mark).
+  // Useful for client-side "is this grid sane" checks; matches the same
+  // metric reported on each OptimizeCandidate.
+  rangeWidthPct: number;
   dryRun: true;
   warnings: string[];
   planHash: string; // sha256 over (rounded) input params — stable identifier

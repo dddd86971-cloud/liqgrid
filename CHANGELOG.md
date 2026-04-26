@@ -2,6 +2,40 @@
 
 All notable changes to hyperliquid-aigrid are documented here.
 
+## [1.2.2] — 2026-04-26
+
+### Added
+
+- **Three new `GridPlan` output fields** for direct visibility into
+  the funding-bias tilt and grid geometry, no longer requiring the
+  caller to walk `levels[]`:
+  - `buySideNotionalUsd`: sum of `sizeUsd` across all buy rungs.
+  - `sellSideNotionalUsd`: sum across all sell rungs.
+  - `rangeWidthPct`: `(rangeHigh - rangeLow) / markPrice`. Matches
+    the same metric on `OptimizeCandidate.rangeWidthPct`.
+- **`expected fills/day < 1` warning.** When realized vol is too low
+  for the configured range, the grid would sit idle and pay funding
+  for nothing. The warning suggests tightening the range to ±2σ daily
+  of mark, or waiting for higher vol. Added to `computeGridPlan`
+  after the stop-loss/min-order checks.
+- **Self-tests: 33 → 37.** New cases: buy/sell-side fields match
+  `levels[]` sum; `rangeWidthPct` math correctness; positive funding
+  → `sellSide > buySide` via the new fields; `expected fills/day < 1`
+  warning fires with a "tighten range" suggestion.
+
+### Notes
+
+- **`planHash` unchanged** for the same input bytes. The new output
+  fields are derived from existing inputs (`levels[]`, `rangeLow`,
+  `rangeHigh`, `markPrice`), and they are NOT in the planHash hashable
+  spec. v1.2.1 → v1.2.2 is a purely additive output extension —
+  upgrading the binary in place does not invalidate cached planHash
+  references in user UIs or audit logs.
+- The SKILL.md now documents an explicit **REFUSE-prefix abort rule**
+  in pre-execution checks: any `plan.warnings` element starting with
+  `REFUSE:` is a hard stop; the agent must not place orders. This
+  formalizes existing behavior for stale-range guards.
+
 ## [1.2.1] — 2026-04-26
 
 ### Added

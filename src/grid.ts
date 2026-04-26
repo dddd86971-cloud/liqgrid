@@ -400,6 +400,9 @@ export function computeGridPlan(input: PlanInput): GridPlan {
       liquidationDistancePct: 0,
       expectedFillsPerDay: 0,
       realizedVolatilityDaily: 0,
+      buySideNotionalUsd: 0,
+      sellSideNotionalUsd: 0,
+      rangeWidthPct: 0,
       dryRun: true,
       warnings: structuralProblems.map((p) => `INPUT: ${p}`),
       planHash: "",
@@ -643,6 +646,37 @@ export function computeGridPlan(input: PlanInput): GridPlan {
     .update(JSON.stringify(hashable))
     .digest("hex");
 
+  // v1.2.2: per-side notional aggregates + rangeWidthPct for direct
+  // visibility of funding-bias tilt and grid geometry from plan output.
+  const buySideNotionalUsd = levels
+    .filter((l) => l.side === "buy")
+    .reduce((acc, l) => acc + l.sizeUsd, 0);
+  const sellSideNotionalUsd = levels
+    .filter((l) => l.side === "sell")
+    .reduce((acc, l) => acc + l.sizeUsd, 0);
+  const rangeWidthPct =
+    input.marketMeta.markPrice > 0
+      ? (input.rangeHigh - input.rangeLow) / input.marketMeta.markPrice
+      : 0;
+
+  // v1.2.2: warn when expected fills/day < 1. Such a grid is essentially
+  // inactive at current volatility — capital sits idle and the user pays
+  // funding for nothing. Most common cause: range too wide relative to
+  // recent vol, or vol genuinely flat. Suggest a tighter range based on
+  // ~2σ daily move on each side (a common rule of thumb for grid bots).
+  const fillsPerDay = estimateFillsPerDay(
+    vol,
+    levels.length,
+    input.rangeLow,
+    input.rangeHigh
+  );
+  if (fillsPerDay < 1 && levels.length > 0) {
+    const suggestedHalfWidthPct = Math.max(vol * 2, 0.005); // floor at ±0.5%
+    warnings.push(
+      `expected fills/day < 1 — grid will be inactive at current vol (${(vol * 100).toFixed(2)}% daily) over a ${(rangeWidthPct * 100).toFixed(1)}% range. Tighten range to ±${(suggestedHalfWidthPct * 100).toFixed(1)}% of mark, or wait for higher volatility.`
+    );
+  }
+
   return {
     coin: input.coin,
     gridCount: levels.length,
@@ -658,13 +692,11 @@ export function computeGridPlan(input: PlanInput): GridPlan {
     maxLossAtRangeBreakUsd: Number(maxLossUsd.toFixed(2)),
     maxLossPctOfNotional: Number(maxLossPct.toFixed(4)),
     liquidationDistancePct: Number(liquidationDistancePct(leverage).toFixed(4)),
-    expectedFillsPerDay: estimateFillsPerDay(
-      vol,
-      levels.length,
-      input.rangeLow,
-      input.rangeHigh
-    ),
+    expectedFillsPerDay: fillsPerDay,
     realizedVolatilityDaily: Number(vol.toFixed(4)),
+    buySideNotionalUsd: Number(buySideNotionalUsd.toFixed(4)),
+    sellSideNotionalUsd: Number(sellSideNotionalUsd.toFixed(4)),
+    rangeWidthPct: Number(rangeWidthPct.toFixed(6)),
     dryRun: true,
     warnings,
     planHash,

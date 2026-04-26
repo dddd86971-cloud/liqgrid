@@ -551,5 +551,90 @@ runTest("tiny-account: falls back to uniform sizing when concentrated still fail
   }
 });
 
+// 30. v1.2.2 — GridPlan exposes buySideNotionalUsd/sellSideNotionalUsd matching levels[].
+// Callers use these directly instead of summing levels[] themselves.
+runTest("v1.2.2: plan exposes buySide/sellSide notional matching sum of levels", baseInput, () => {
+  const plan = computeGridPlan(baseInput);
+  assert(typeof plan.buySideNotionalUsd === "number", "buySideNotionalUsd must be a number");
+  assert(typeof plan.sellSideNotionalUsd === "number", "sellSideNotionalUsd must be a number");
+  const buyFromLevels = plan.levels
+    .filter((l) => l.side === "buy")
+    .reduce((acc, l) => acc + l.sizeUsd, 0);
+  const sellFromLevels = plan.levels
+    .filter((l) => l.side === "sell")
+    .reduce((acc, l) => acc + l.sizeUsd, 0);
+  assert(
+    Math.abs(plan.buySideNotionalUsd - buyFromLevels) < 0.01,
+    `buySideNotionalUsd (${plan.buySideNotionalUsd}) must match sum of buy levels (${buyFromLevels})`
+  );
+  assert(
+    Math.abs(plan.sellSideNotionalUsd - sellFromLevels) < 0.01,
+    `sellSideNotionalUsd (${plan.sellSideNotionalUsd}) must match sum of sell levels (${sellFromLevels})`
+  );
+});
+
+// 31. v1.2.2 — rangeWidthPct correctly reflects (rangeHigh - rangeLow) / mark.
+runTest("v1.2.2: rangeWidthPct = (rangeHigh - rangeLow) / markPrice", baseInput, () => {
+  const plan = computeGridPlan(baseInput);
+  const expected = (baseInput.rangeHigh - baseInput.rangeLow) / baseInput.marketMeta.markPrice;
+  assert(
+    Math.abs(plan.rangeWidthPct - expected) < 1e-5,
+    `rangeWidthPct ${plan.rangeWidthPct} should equal ${expected}`
+  );
+  // Sanity: a 10% range around $90k yields ~0.10
+  const wider = {
+    ...baseInput,
+    rangeLow: 85500,
+    rangeHigh: 94500,
+    marketMeta: { ...baseInput.marketMeta, markPrice: 90000 },
+  };
+  const planWider = computeGridPlan(wider);
+  assert(
+    Math.abs(planWider.rangeWidthPct - 0.1) < 1e-5,
+    `rangeWidthPct should be ~0.10 for a 10%-of-mark range, got ${planWider.rangeWidthPct}`
+  );
+});
+
+// 32. v1.2.2 — funding-bias verifiable directly from buySide/sellSide fields.
+// Positive funding → sellSide should exceed buySide.
+runTest("v1.2.2: positive funding → sellSide > buySide via plan fields", baseInput, () => {
+  const withFunding = {
+    ...baseInput,
+    marketMeta: { ...baseInput.marketMeta, fundingRateHourly: 5.7e-5 }, // ~50% annualized
+  };
+  const plan = computeGridPlan(withFunding);
+  if (plan.levels.length > 0) {
+    assert(
+      plan.sellSideNotionalUsd > plan.buySideNotionalUsd,
+      `positive funding should bias sell-side: buy=${plan.buySideNotionalUsd} sell=${plan.sellSideNotionalUsd}`
+    );
+    // Also verify the funding-bias warning still fires
+    assert(
+      plan.warnings.some((w) => w.includes("funding-aware bias applied")),
+      "expected funding-bias warning"
+    );
+  }
+});
+
+// 33. v1.2.2 — fills/day < 1 emits actionable "tighten range" warning.
+// Reproduce with a wide range relative to vol (25% range over low-vol candles).
+runTest("v1.2.2: fills/day < 1 emits 'tighten range' warning", baseInput, () => {
+  const wide = {
+    ...baseInput,
+    rangeLow: 80000,
+    rangeHigh: 100000,
+    marketMeta: { ...baseInput.marketMeta, markPrice: 90000 },
+  };
+  const plan = computeGridPlan(wide);
+  if (plan.expectedFillsPerDay < 1 && plan.levels.length > 0) {
+    const fillsWarning = plan.warnings.find((w) => w.includes("expected fills/day < 1"));
+    assert(fillsWarning !== undefined, "expected fills/day<1 warning should fire");
+    assert(
+      fillsWarning!.includes("Tighten range"),
+      `warning should suggest tightening range, got: ${fillsWarning}`
+    );
+  }
+});
+
 // eslint-disable-next-line no-console
 console.log("\nAll self-tests passed ✅");
