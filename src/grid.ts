@@ -798,6 +798,8 @@ export function runBacktest(input: BacktestInput): BacktestResult {
     maxDrawdownUsd: 0,
     sharpeApprox: 0,
     hitStopLoss: false,
+    feesPaidUsd: 0,
+    realizedPnlNetUsd: 0,
     dryRun: true,
     warnings,
   });
@@ -863,6 +865,16 @@ export function runBacktest(input: BacktestInput): BacktestResult {
   let runningPnl = 0;
   let peak = 0;
   let maxDd = 0;
+  // v1.2.6 — track simulated maker fees across every fill. Default 1.5 bps
+  // matches Hyperliquid tier-0 (verified on live PR-#360 fill: a $11.69
+  // notional buy carried fee $0.001867 = 1.5 bps). User can override via
+  // marketMeta.feeRateMaker. Stop-loss exit is also a maker-equivalent fill
+  // for accounting (we don't model the slippage, just the fee).
+  const btFeeRateMaker =
+    typeof input.marketMeta.feeRateMaker === "number" && input.marketMeta.feeRateMaker >= 0
+      ? input.marketMeta.feeRateMaker
+      : 0.00015;
+  let feesPaid = 0;
 
   for (const bar of backtestCandles) {
     if (!Number.isFinite(bar.low) || !Number.isFinite(bar.high) || bar.low <= 0 || bar.high <= 0) {
@@ -898,6 +910,7 @@ export function runBacktest(input: BacktestInput): BacktestResult {
         rungState[i].filled = true;
         longLots.push({ price: r.price, coin: r.sizeCoin });
         fillsBuy++;
+        feesPaid += r.price * r.sizeCoin * btFeeRateMaker;
       }
     }
     // Now sell fills — pair each with the oldest long lot at that price or below.
@@ -913,6 +926,7 @@ export function runBacktest(input: BacktestInput): BacktestResult {
         const lot = longLots.shift()!;
         realized += (r.price - lot.price) * lot.coin;
         fillsSell++;
+        feesPaid += r.price * lot.coin * btFeeRateMaker;
       }
     }
     runningPnl = realized;
@@ -960,6 +974,8 @@ export function runBacktest(input: BacktestInput): BacktestResult {
     maxDrawdownUsd: Number(maxDd.toFixed(4)),
     sharpeApprox: Number(sharpeApprox.toFixed(3)),
     hitStopLoss,
+    feesPaidUsd: Number(feesPaid.toFixed(4)),
+    realizedPnlNetUsd: Number((realized - feesPaid).toFixed(4)),
     dryRun: true,
     warnings,
   };
@@ -1266,7 +1282,12 @@ export function runOptimize(input: OptimizeInput): OptimizeResult {
         evaluated++;
         // Reject failed runs.
         if (r.windowBars === 0 || r.gridCount === 0) continue;
-        const score = r.realizedPnlUsd / Math.max(r.maxDrawdownUsd, 1);
+        // v1.2.6 — score against the FEE-NET realized PnL. Pre-v1.2.6 a tight,
+        // fee-eroding grid could top the leaderboard via gross PnL; the user
+        // would then deploy it and watch fees eat the returns. Net scoring
+        // surfaces this honestly. Old fields (realizedPnlUsd) preserved for
+        // backwards compat.
+        const score = r.realizedPnlNetUsd / Math.max(r.maxDrawdownUsd, 1);
         candidates.push({
           rangeLow,
           rangeHigh,
@@ -1277,6 +1298,8 @@ export function runOptimize(input: OptimizeInput): OptimizeResult {
           maxDrawdownUsd: r.maxDrawdownUsd,
           fills: r.fills,
           hitStopLoss: r.hitStopLoss,
+          feesPaidUsd: r.feesPaidUsd,
+          realizedPnlNetUsd: r.realizedPnlNetUsd,
           score: Number(score.toFixed(4)),
         });
       }

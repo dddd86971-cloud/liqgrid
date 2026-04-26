@@ -1,6 +1,6 @@
 {
   "name": "hyperliquid-aigrid",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "description": "Deterministic grid-parameter engine for Hyperliquid perpetuals. Powers the hyperliquid-aigrid Plugin Store Skill.",
   "type": "module",
   "bin": {

@@ -816,5 +816,109 @@ runTest("v1.2.4: fee-erosion warning fires when gap < 2x breakEven", baseInput, 
   }
 });
 
+// 42. v1.2.6 — Backtest reports feesPaidUsd > 0 when fills happen.
+// Each buy or sell fill should add price × coin × feeRateMaker to feesPaid.
+runTest("v1.2.6: backtest reports feesPaidUsd > 0 when fills happen", baseInput, () => {
+  const bt = runBacktest({ ...baseInput, backtestWindowBars: 24 });
+  if (bt.fills > 0) {
+    assert(
+      bt.feesPaidUsd > 0,
+      `expected feesPaidUsd > 0 with ${bt.fills} fills, got ${bt.feesPaidUsd}`
+    );
+    // realizedPnlNetUsd = realizedPnlUsd - feesPaidUsd (within rounding)
+    const expectedNet = bt.realizedPnlUsd - bt.feesPaidUsd;
+    assert(
+      Math.abs(bt.realizedPnlNetUsd - expectedNet) < 1e-3,
+      `net=${bt.realizedPnlNetUsd} should equal gross−fees=${expectedNet}`
+    );
+    // Sanity: fees should be a small but non-negligible fraction of gross
+    // for normal grids. If fees > 50% of gross, something's wrong.
+    if (bt.realizedPnlUsd > 0) {
+      const feeFraction = bt.feesPaidUsd / bt.realizedPnlUsd;
+      assert(
+        feeFraction < 0.5,
+        `fees ${feeFraction * 100}% of gross looks excessive — algorithm bug?`
+      );
+    }
+  }
+});
+
+// 43. v1.2.6 — Override feeRateMaker → feesPaidUsd scales linearly.
+runTest("v1.2.6: backtest feesPaidUsd scales with feeRateMaker override", baseInput, () => {
+  const baseFees = runBacktest({ ...baseInput, backtestWindowBars: 24 }).feesPaidUsd;
+  // 5× fee rate → 5× total fees
+  const highFee = runBacktest({
+    ...baseInput,
+    backtestWindowBars: 24,
+    marketMeta: { ...baseInput.marketMeta, feeRateMaker: 0.00075 }, // 5× default
+  }).feesPaidUsd;
+  if (baseFees > 0) {
+    assert(
+      Math.abs(highFee / baseFees - 5) < 0.01,
+      `5× feeRate should give 5× fees: base=${baseFees}, 5×=${highFee}, ratio=${highFee / baseFees}`
+    );
+  }
+  // Zero fee rate → zero fees
+  const noFee = runBacktest({
+    ...baseInput,
+    backtestWindowBars: 24,
+    marketMeta: { ...baseInput.marketMeta, feeRateMaker: 0 },
+  }).feesPaidUsd;
+  assert(noFee === 0, `feeRateMaker=0 should yield zero fees, got ${noFee}`);
+});
+
+// 44. v1.2.6 — Optimize ranks by realizedPnlNetUsd (not gross). When fees
+// vary across candidates, the ranking by net can differ from ranking by
+// gross. Verify the optimizer's score uses the net field.
+runTest("v1.2.6: optimize candidates expose feesPaidUsd + realizedPnlNetUsd", baseInput, () => {
+  const opt = runOptimize({
+    coin: "BTC",
+    totalNotionalUsd: 300,
+    candles: baseInput.candles,
+    marketMeta: { ...baseInput.marketMeta, minOrderSizeUsd: 10 },
+    backtestWindowBars: 24,
+    topN: 5,
+  });
+  if (opt.candidates.length > 0) {
+    for (const c of opt.candidates) {
+      assert(typeof c.feesPaidUsd === "number", "candidate must have feesPaidUsd");
+      assert(typeof c.realizedPnlNetUsd === "number", "candidate must have realizedPnlNetUsd");
+      // net = gross - fees (within rounding)
+      const expected = c.realizedPnlUsd - c.feesPaidUsd;
+      assert(
+        Math.abs(c.realizedPnlNetUsd - expected) < 1e-3,
+        `candidate net=${c.realizedPnlNetUsd} should equal gross-fees=${expected}`
+      );
+      // score should equal net / max(maxDD, 1) (within rounding from toFixed(4))
+      const expectedScore = c.realizedPnlNetUsd / Math.max(c.maxDrawdownUsd, 1);
+      assert(
+        Math.abs(c.score - expectedScore) < 1e-3,
+        `score=${c.score} should equal net/max(DD,1)=${expectedScore}`
+      );
+    }
+    // Top candidate should have highest score
+    for (let i = 1; i < opt.candidates.length; i++) {
+      assert(
+        opt.candidates[i].score <= opt.candidates[i - 1].score,
+        `candidates not sorted by score descending`
+      );
+    }
+  }
+});
+
+// 45. v1.2.6 — Empty BacktestResult also has feesPaidUsd / realizedPnlNetUsd
+// fields (=0). Defensive: makes sure callers can rely on the fields existing
+// even when backtest fails fast on bad input.
+runTest("v1.2.6: empty backtest result still has fee-aware fields", baseInput, () => {
+  const bt = runBacktest({
+    ...baseInput,
+    candles: [],
+    backtestWindowBars: 24,
+  });
+  assert(bt.windowBars === 0, "should be empty result");
+  assert(bt.feesPaidUsd === 0, "empty result feesPaidUsd should be 0");
+  assert(bt.realizedPnlNetUsd === 0, "empty result realizedPnlNetUsd should be 0");
+});
+
 // eslint-disable-next-line no-console
 console.log("\nAll self-tests passed ✅");

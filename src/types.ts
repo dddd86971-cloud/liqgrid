@@ -105,11 +105,18 @@ export interface OptimizeCandidate {
   leverage: number;
   riskProfile: RiskProfile;
   rangeWidthPct: number; // (rangeHigh - rangeLow) / mark
-  realizedPnlUsd: number;
+  realizedPnlUsd: number; // GROSS — kept for backwards compat
   maxDrawdownUsd: number;
   fills: number;
   hitStopLoss: boolean;
-  score: number; // higher is better
+  // v1.2.6 — fee-aware ranking. feesPaidUsd is the simulated maker fees on
+  // every fill; realizedPnlNetUsd is gross − fees; `score` (Calmar-style)
+  // is now computed against realizedPnlNetUsd, not gross. This prevents
+  // the optimizer from recommending tight grids that look profitable on
+  // paper but actually fee-erode.
+  feesPaidUsd: number;
+  realizedPnlNetUsd: number;
+  score: number; // realizedPnlNetUsd / max(maxDD, 1) — higher is better
 }
 
 export interface OptimizeResult {
@@ -133,12 +140,19 @@ export interface BacktestResult {
   fills: number;
   fillsBuy: number;
   fillsSell: number;
-  realizedPnlUsd: number;
+  realizedPnlUsd: number; // GROSS realized (no fees) — kept for backwards compat
   unrealizedPnlUsd: number; // on any open inventory at window end
   totalPnlUsd: number;
   maxDrawdownUsd: number;
   sharpeApprox: number; // realized PnL / stdev of per-bar PnL * sqrt(bars per year)
   hitStopLoss: boolean;
+  // v1.2.6 — fee-aware backtest fields. feesPaidUsd is the sum of maker fees
+  // across every simulated fill (price × sizeCoin × feeRateMaker per fill).
+  // realizedPnlNetUsd = realizedPnlUsd − feesPaidUsd. Skill UI / runOptimize
+  // should prefer the net figure when ranking strategies; the gross figure
+  // is preserved unchanged for callers that already depend on it.
+  feesPaidUsd: number;
+  realizedPnlNetUsd: number;
   dryRun: true;
   warnings: string[];
 }

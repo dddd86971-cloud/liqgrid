@@ -14,7 +14,7 @@
 import { readFileSync } from "node:fs";
 import { computeGridPlan, runBacktest, runQuickstart, runOptimize } from "./grid.js";
 import { CAPS } from "./types.js";
-const VERSION = "1.2.5";
+const VERSION = "1.2.6";
 function printHelp() {
     // eslint-disable-next-line no-console
     console.log(`hyperliquid-aigrid v${VERSION}
@@ -220,6 +220,9 @@ function explainPlan(plan) {
     lines.push(`Plan ${plan.planHash.slice(0, 6)}  (${plan.coin}-PERP, ${plan.riskProfile})`);
     lines.push(``);
     lines.push(`• Range:           ${plan.rangeLow} — ${plan.rangeHigh}`);
+    if (plan.rangeWidthPct !== undefined) {
+        lines.push(`  width:           ${(plan.rangeWidthPct * 100).toFixed(2)}% of mark`);
+    }
     lines.push(`• Rungs:           ${plan.gridCount}`);
     lines.push(`• Total notional:  $${plan.totalNotionalUsd}`);
     if (plan.marginRequiredUsd !== undefined) {
@@ -227,6 +230,22 @@ function explainPlan(plan) {
     }
     lines.push(`• Leverage:        ${plan.leverage}×`);
     lines.push(``);
+    // v1.2.6: surface buy/sell notional split (v1.2.2 field) directly. The ratio
+    // reveals funding-bias tilt at a glance — no need to walk levels[] manually.
+    if (plan.buySideNotionalUsd !== undefined && plan.sellSideNotionalUsd !== undefined) {
+        const ratio = plan.sellSideNotionalUsd > 0
+            ? plan.buySideNotionalUsd / plan.sellSideNotionalUsd
+            : 1;
+        let tilt = "neutral";
+        if (ratio < 0.95)
+            tilt = "sell-tilted (collecting positive funding)";
+        else if (ratio > 1.05)
+            tilt = "buy-tilted (collecting negative funding)";
+        lines.push(`Notional split:`);
+        lines.push(`  buy-side:        $${plan.buySideNotionalUsd.toFixed(2)}`);
+        lines.push(`  sell-side:       $${plan.sellSideNotionalUsd.toFixed(2)}  (ratio buy/sell ${ratio.toFixed(3)} — ${tilt})`);
+        lines.push(``);
+    }
     lines.push(`Stop-loss:`);
     lines.push(`  ${plan.stopLossSide === "long" ? "below" : "above"} ${plan.stopLossTriggerPrice}`);
     lines.push(`  worst case loss at range break: $${plan.maxLossAtRangeBreakUsd.toFixed(2)} (${(plan.maxLossPctOfNotional * 100).toFixed(1)}% of notional)`);
@@ -234,6 +253,25 @@ function explainPlan(plan) {
     lines.push(`Liquidation buffer: ~${(plan.liquidationDistancePct * 100).toFixed(1)}% — hyperliquid-aigrid estimate only; Hyperliquid's risk engine is authoritative.`);
     lines.push(``);
     lines.push(`Expected fills/day: ${plan.expectedFillsPerDay} (based on ${(plan.realizedVolatilityDaily * 100).toFixed(2)}% realized daily vol)`);
+    // v1.2.6: surface fee-aware economics (v1.2.4 fields). For each completed
+    // roundtrip, what does the user actually net after maker fees on both legs?
+    if (plan.avgRungGapPct !== undefined &&
+        plan.expectedFeePerRoundtripUsd !== undefined &&
+        plan.breakEvenGapPct !== undefined &&
+        plan.feeAwareNetEdgePerRoundtripUsd !== undefined) {
+        const safetyMargin = plan.breakEvenGapPct > 0 ? plan.avgRungGapPct / plan.breakEvenGapPct : 0;
+        lines.push(``);
+        lines.push(`Fee economics (per completed roundtrip):`);
+        lines.push(`  rung gap:        ${(plan.avgRungGapPct * 100).toFixed(3)}%  (break-even ${(plan.breakEvenGapPct * 100).toFixed(3)}% — ${safetyMargin.toFixed(1)}× margin)`);
+        lines.push(`  expected fee:    $${plan.expectedFeePerRoundtripUsd.toFixed(4)}  (maker × 2 legs)`);
+        lines.push(`  net edge / RT:   $${plan.feeAwareNetEdgePerRoundtripUsd.toFixed(4)}`);
+        if (plan.expectedFillsPerDay > 0) {
+            // Half the fills/day = expected roundtrips/day (each RT = buy + sell).
+            const rtPerDay = plan.expectedFillsPerDay / 2;
+            const dailyNet = rtPerDay * plan.feeAwareNetEdgePerRoundtripUsd;
+            lines.push(`  est. daily net:  $${dailyNet.toFixed(4)}  (${rtPerDay.toFixed(1)} RT/day × $${plan.feeAwareNetEdgePerRoundtripUsd.toFixed(4)})`);
+        }
+    }
     if (plan.warnings.length > 0) {
         lines.push(``);
         lines.push(`Warnings:`);

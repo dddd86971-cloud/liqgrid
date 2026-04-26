@@ -2,6 +2,55 @@
 
 All notable changes to hyperliquid-aigrid are documented here.
 
+## [1.2.6] — 2026-04-26
+
+### Changed
+
+- **`explain` output upgraded** — now surfaces every v1.2.2 / v1.2.4
+  field in human-readable form. Previously the binary computed
+  `buySideNotionalUsd`, `sellSideNotionalUsd`, `rangeWidthPct`,
+  `avgRungGapPct`, `expectedFeePerRoundtripUsd`, `breakEvenGapPct`,
+  and `feeAwareNetEdgePerRoundtripUsd` but `explain` showed none of
+  them — the user had to read raw JSON. New `explain` sections:
+  - **Notional split** — buy/sell aggregate + ratio + funding-tilt
+    label (sell-tilted / buy-tilted / neutral).
+  - **Fee economics** — rung gap with safety margin (gap / break-even
+    multiple), expected fee per RT, net edge per RT, estimated daily
+    net based on `expectedFillsPerDay / 2`.
+- **`runOptimize` ranks candidates by net (post-fee) score** —
+  pre-v1.2.6 `score = realizedPnlUsd / max(maxDD, 1)` used GROSS PnL,
+  so a tight grid that grossed $2 but burned $1.50 in fees would still
+  rank above a wider grid that netted $1.20 cleanly. v1.2.6 score uses
+  `realizedPnlNetUsd / max(maxDD, 1)` — fee drag is now part of the
+  optimization, not glossed over.
+
+### Added
+
+- **`BacktestResult.feesPaidUsd` + `realizedPnlNetUsd`** — every
+  simulated fill in `runBacktest` accumulates a maker fee
+  (`price × sizeCoin × feeRateMaker`); the result reports total fees
+  paid + the net realized. Existing `realizedPnlUsd` is preserved
+  unchanged for backwards compat (now explicitly documented as the
+  GROSS figure).
+- **`OptimizeCandidate.feesPaidUsd` + `realizedPnlNetUsd`** — surfaces
+  the same breakdown per candidate so users can audit "why did
+  candidate A rank lower than B even though A has higher gross PnL".
+
+### Notes
+
+- **Self-tests: 45 → 49.** New cases: backtest emits non-zero
+  `feesPaidUsd` when fills happen; user override of `feeRateMaker`
+  scales fees linearly (5× rate → 5× fees, 0× rate → 0 fees);
+  optimize candidates expose net fields and rank correctly by net
+  score; empty backtest result still has the new fields = 0.
+- **`computeGridPlan()` and `quickstart()` semantics unchanged.**
+  Live plan output for the same input bytes is identical to v1.2.5
+  (`planHash` byte-stable). Only `runBacktest` and `runOptimize`
+  return more fields, plus `explain` renders those fields.
+- Backwards compatibility: pre-v1.2.6 callers that read
+  `realizedPnlUsd` and `score` continue to work; new callers should
+  prefer `realizedPnlNetUsd` for honest comparison.
+
 ## [1.2.5] — 2026-04-26
 
 ### Added (Skill orchestration layer — SKILL.md only, no binary changes)
