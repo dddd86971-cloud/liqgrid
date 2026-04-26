@@ -716,13 +716,36 @@ export function runBacktest(input) {
 // ---------------------------------------------------------------------------
 // `hyperliquid-aigrid quickstart` — zero-friction first-time use.
 // Given coin + notional + candles, derive sensible defaults for range,
-// leverage, and risk profile from the recent vol regime. Returns a complete
-// PlanInput the agent can pipe straight into `hyperliquid-aigrid plan`.
+// leverage, and risk profile from the recent vol regime AND from the
+// account's actual placeable rung count. Returns a complete PlanInput the
+// agent can pipe straight into `hyperliquid-aigrid plan`.
 //
-// Range geometry: mark ± k × σ_daily × √7 × profileWidth, intersected with
-// the recent local low/high to keep the range plausible vs current market.
-// k = 1.5 is "covers ~85% of expected 7-day excursions under log-normal"
-// — wide enough to fill, narrow enough to keep stop-loss within 30% cap.
+// v1.2.3 — NOTIONAL-AWARE RANGE DERIVATION
+//
+// Pre-v1.2.3 the range was purely vol-driven:
+//     half = k × σ_daily × √7 × profileWidth
+// which gave the same range (~±4-7%) regardless of account size. For
+// small accounts forced into MIN_GRID_COUNT=4 rungs, this meant rungs
+// were ~1%+ apart while hourly vol was ~0.3% — so the grid would sit
+// inactive for hours waiting for an outlier move.
+//
+// v1.2.3 takes both the available rung count AND the per-bar vol into
+// account. The actual range is the *minimum* of:
+//     (a) natural geometry: (rungs - 1) × σ_hourly × profileGap
+//         — keeps each gap close to one σ_h, so the grid trades on
+//           ordinary intraday wiggles rather than rare outlier moves.
+//     (b) vol envelope: k × σ_daily × √7 × profileWidth
+//         — the original 7-day excursion bound; prevents over-wide
+//           ranges on large notionals where (a) would otherwise blow up.
+//
+// Concrete examples at σ_d=1.35% (BTC, calm day), conservative profile:
+//   $24 × 2× = $48 → max 4 rungs (HL $10 min) → (a)=0.41%, (b)=4.3% →
+//                                                use 0.41% (tight, active)
+//   $300 × 2× = $600 → up to 50 rungs        → (a)=6.7%, (b)=4.3% →
+//                                                use 4.3% (vol envelope)
+//   $5000 × 2× = $10k → 50 rungs (capped)    → same as $300 (vol)
+//
+// Leverage and profile defaults unchanged from v1.2.0.
 // ---------------------------------------------------------------------------
 const QUICKSTART_K = 1.5;
 const PROFILE_WIDTH = {
@@ -734,6 +757,14 @@ const PROFILE_LEVERAGE = {
     conservative: 2,
     balanced: 3,
     aggressive: 5,
+};
+// v1.2.3 — gap multiplier on σ_hourly for the natural-geometry range.
+// 1.0× σ_h = "fills on typical hourly wiggle" (active, conservative)
+// 2.0× σ_h = "fills on roughly 4-hour wiggle" (slower, aggressive)
+const PROFILE_GAP = {
+    conservative: 1.0,
+    balanced: 1.5,
+    aggressive: 2.0,
 };
 export function runQuickstart(input) {
     const warnings = [];
@@ -758,39 +789,67 @@ export function runQuickstart(input) {
     const window = input.candles.slice(-Math.min(windowBars, input.candles.length));
     const mark = input.marketMeta.markPrice;
     const sigmaDaily = realizedVolatilityDaily(window);
+    const sigmaHourly = sigmaDaily / Math.sqrt(24);
     const localLow = Math.min(...window.map((c) => c.low));
     const localHigh = Math.max(...window.map((c) => c.high));
-    // Volatility-derived half-width (in price units, geometric):
-    // half = mark × (exp(k × σ × √7 × profileWidth) − 1)
-    const halfWidthPct = Math.exp(QUICKSTART_K * sigmaDaily * Math.sqrt(7) * PROFILE_WIDTH[profile]) - 1;
-    let recLow = mark * (1 - halfWidthPct);
-    let recHigh = mark * (1 + halfWidthPct);
-    // Intersect with local low/high so we don't propose a range that's already
-    // been blown through in the last week — but not narrower than ±2% from mark
-    // to ensure enough room for at least 4 rungs.
-    const minHalf = mark * 0.02;
-    recLow = Math.max(recLow, localLow * 0.98); // small buffer
-    recHigh = Math.min(recHigh, localHigh * 1.02);
-    if (mark - recLow < minHalf)
-        recLow = mark - minHalf;
-    if (recHigh - mark < minHalf)
-        recHigh = mark + minHalf;
-    // Tick-align both ends.
-    const tick = input.marketMeta.tickSize > 0 ? input.marketMeta.tickSize : 1;
-    recLow = roundToTick(recLow, tick);
-    recHigh = roundToTick(recHigh, tick);
     let leverage = PROFILE_LEVERAGE[profile];
     // Respect Hyperliquid's per-instrument max leverage if present.
     if (typeof input.marketMeta.maxLeverage === "number" && input.marketMeta.maxLeverage > 0) {
         leverage = Math.min(leverage, input.marketMeta.maxLeverage);
     }
     leverage = Math.min(leverage, CAPS.MAX_LEVERAGE);
+    // v1.2.3 — Compute the placeable rung count from the actual account.
+    // Each rung must clear marketMeta.minOrderSizeUsd. Effective per-rung
+    // notional is roughly totalNotional × leverage / N for uniform sizing
+    // (the small-account fallback regime; concentrated weighting is more
+    // generous but tighter on edge rungs). We use the uniform formula here
+    // because that's the worst case and matches plan()'s fallback path.
+    const minOrder = typeof input.marketMeta.minOrderSizeUsd === "number" && input.marketMeta.minOrderSizeUsd > 0
+        ? input.marketMeta.minOrderSizeUsd
+        : 10;
+    const maxRungsByMinOrder = Math.floor((input.totalNotionalUsd * leverage) / minOrder);
+    const targetRungs = Math.max(CAPS.MIN_GRID_COUNT, Math.min(CAPS.MAX_GRID_COUNT, maxRungsByMinOrder));
+    // (a) Natural geometry: rung gap ≈ one hourly σ × profileGap.
+    // Range = (rungs - 1) × gap. Keeps each rung in reach of typical
+    // hourly price wiggles.
+    const naturalGap = sigmaHourly * PROFILE_GAP[profile];
+    const naturalHalfPct = ((targetRungs - 1) / 2) * naturalGap;
+    // (b) Vol-envelope upper bound: the original 7-day excursion sizing.
+    // Geometric half-width: half = exp(k × σ × √7 × profileWidth) − 1.
+    const envelopeHalfPct = Math.exp(QUICKSTART_K * sigmaDaily * Math.sqrt(7) * PROFILE_WIDTH[profile]) - 1;
+    // Use the tighter of the two — never wider than the vol envelope, never
+    // wider than what (rungs - 1) × σ_h × profileGap suggests.
+    let halfWidthPct = Math.min(naturalHalfPct, envelopeHalfPct);
+    // Floor at ±0.2% so degenerate inputs (very low vol, MIN_GRID_COUNT)
+    // don't collapse to a near-zero range that crosses the price tick.
+    halfWidthPct = Math.max(halfWidthPct, 0.002);
+    let recLow = mark * (1 - halfWidthPct);
+    let recHigh = mark * (1 + halfWidthPct);
+    // Intersect with local low/high so we don't propose a range that's already
+    // been blown through in the last week — but never narrower than the
+    // computed half-width itself, since local clamping shouldn't shrink the
+    // range below what the algorithm just chose. (Old behavior was a hardcoded
+    // ±2%; v1.2.3 anchors to the just-computed half-width.)
+    const safetyFloor = halfWidthPct;
+    recLow = Math.max(recLow, localLow * 0.98); // small buffer
+    recHigh = Math.min(recHigh, localHigh * 1.02);
+    if (mark - recLow < mark * safetyFloor)
+        recLow = mark * (1 - safetyFloor);
+    if (recHigh - mark < mark * safetyFloor)
+        recHigh = mark + mark * safetyFloor;
+    // Tick-align both ends.
+    const tick = input.marketMeta.tickSize > 0 ? input.marketMeta.tickSize : 1;
+    recLow = roundToTick(recLow, tick);
+    recHigh = roundToTick(recHigh, tick);
     // Health checks
     if (sigmaDaily > 0.08) {
         warnings.push(`realized daily vol ${(sigmaDaily * 100).toFixed(1)}% is high; consider reducing notional or using conservative profile`);
     }
     if (mark < recLow || mark > recHigh) {
         warnings.push("mark price outside recommended range — local-history clamp may be too tight");
+    }
+    if (maxRungsByMinOrder < CAPS.MIN_GRID_COUNT) {
+        warnings.push(`notional × leverage (${(input.totalNotionalUsd * leverage).toFixed(0)}) only fits ${maxRungsByMinOrder} rungs at minOrder $${minOrder}; plan() will auto-fall back to uniform sizing at MIN_GRID_COUNT=${CAPS.MIN_GRID_COUNT}. Increase notional to ≥ $${Math.ceil((CAPS.MIN_GRID_COUNT * minOrder) / leverage)} for full ${CAPS.MIN_GRID_COUNT}-rung coverage.`);
     }
     const planInput = {
         coin: input.coin,
@@ -802,9 +861,14 @@ export function runQuickstart(input) {
         marketMeta: input.marketMeta,
         candles: window,
     };
-    const rationale = `range = mark ± ${(halfWidthPct * 100).toFixed(1)}% (k=${QUICKSTART_K} × σ_daily=${(sigmaDaily * 100).toFixed(2)}% × √7 × profileWidth=${PROFILE_WIDTH[profile]}), ` +
-        `clamped to local 7d window [${localLow.toFixed(2)}, ${localHigh.toFixed(2)}]. ` +
-        `Leverage = profile default ${PROFILE_LEVERAGE[profile]}, capped at min(market max, hard cap 10x).`;
+    const useNatural = naturalHalfPct < envelopeHalfPct;
+    const rationale = `range = mark ± ${(halfWidthPct * 100).toFixed(2)}% (` +
+        (useNatural
+            ? `notional-bound: ${targetRungs} placeable rungs × σ_hourly=${(sigmaHourly * 100).toFixed(3)}% × profileGap=${PROFILE_GAP[profile]}; gap=${(naturalGap * 100).toFixed(3)}%`
+            : `vol-envelope: k=${QUICKSTART_K} × σ_daily=${(sigmaDaily * 100).toFixed(2)}% × √7 × profileWidth=${PROFILE_WIDTH[profile]}`) +
+        `), clamped to local 7d window [${localLow.toFixed(2)}, ${localHigh.toFixed(2)}]. ` +
+        `Leverage = profile default ${PROFILE_LEVERAGE[profile]}, capped at min(market max, hard cap 10x). ` +
+        `Placeable rungs from notional × leverage / minOrder = ${targetRungs} (clamped to [${CAPS.MIN_GRID_COUNT}, ${CAPS.MAX_GRID_COUNT}]).`;
     return {
         coin: input.coin,
         recommendedRangeLow: recLow,

@@ -528,5 +528,82 @@ runTest("v1.2.2: fills/day < 1 emits 'tighten range' warning", baseInput, () => 
         assert(fillsWarning.includes("Tighten range"), `warning should suggest tightening range, got: ${fillsWarning}`);
     }
 });
+// 34. v1.2.3 — Quickstart: small account → notional-bound (natural geometry) range.
+// Account = $24 × 2× = $48 → max 4 rungs (at $10 minOrder). Range should be
+// (rungs - 1) × σ_h × profileGap, NOT vol-envelope. Should be MUCH tighter
+// than the pre-v1.2.3 default which gave the same range to all account sizes.
+runTest("v1.2.3 quickstart: small account uses notional-bound (natural) geometry", baseInput, () => {
+    const qs = runQuickstart({
+        coin: "BTC",
+        totalNotionalUsd: 24,
+        candles: baseInput.candles,
+        marketMeta: { ...baseInput.marketMeta, minOrderSizeUsd: 10 },
+        riskProfile: "conservative",
+    });
+    assert(qs.rationale.includes("notional-bound"), `expected notional-bound rationale, got: ${qs.rationale}`);
+    // Range should be tight (~±0.4% at typical low vol), much less than the
+    // old default of ~±4% for any account size.
+    const half = (qs.recommendedRangeHigh - qs.recommendedRangeLow) / 2 / qs.markPrice;
+    assert(half < 0.02, `small-account range should be < ±2%, got ±${(half * 100).toFixed(2)}%`);
+    // Should have warning about ≤4 rungs feasibility.
+    const placedRungsClue = qs.rationale.match(/Placeable rungs.*= (\d+)/);
+    assert(placedRungsClue !== null, "rationale should reveal placeable rung count");
+    assert(parseInt(placedRungsClue[1], 10) <= 5, "small account should be capped near MIN_GRID_COUNT");
+});
+// 35. v1.2.3 — Quickstart: large account → vol-envelope range (capped).
+// Account = $5000 × 2× = $10000 → could fit 50+ rungs by min-order, but
+// natural geometry would give a way-too-wide range. Should fall through to
+// the vol-envelope upper bound — the same old behavior for big accounts.
+runTest("v1.2.3 quickstart: large account uses vol-envelope range", baseInput, () => {
+    const qs = runQuickstart({
+        coin: "BTC",
+        totalNotionalUsd: 5000,
+        candles: baseInput.candles,
+        marketMeta: { ...baseInput.marketMeta, minOrderSizeUsd: 10 },
+        riskProfile: "conservative",
+    });
+    assert(qs.rationale.includes("vol-envelope"), `expected vol-envelope rationale, got: ${qs.rationale}`);
+    // Range should be in the historical vol-envelope ballpark (±2-7%).
+    const half = (qs.recommendedRangeHigh - qs.recommendedRangeLow) / 2 / qs.markPrice;
+    assert(half >= 0.005, `large-account range should not collapse to near-zero, got ±${(half * 100).toFixed(2)}%`);
+});
+// 36. v1.2.3 — Quickstart: rung count monotonically increases with notional.
+// Confirms the algorithm's intent: more capital → more rungs (until capped).
+runTest("v1.2.3 quickstart: rung count grows with notional", baseInput, () => {
+    function rungs(notional) {
+        const qs = runQuickstart({
+            coin: "BTC",
+            totalNotionalUsd: notional,
+            candles: baseInput.candles,
+            marketMeta: { ...baseInput.marketMeta, minOrderSizeUsd: 10 },
+            riskProfile: "conservative",
+        });
+        const m = qs.rationale.match(/Placeable rungs.*= (\d+)/);
+        return m ? parseInt(m[1], 10) : 0;
+    }
+    const r24 = rungs(24);
+    const r100 = rungs(100);
+    const r500 = rungs(500);
+    const r5000 = rungs(5000);
+    assert(r24 <= r100, `expected rungs($24)=${r24} <= rungs($100)=${r100}`);
+    assert(r100 <= r500, `expected rungs($100)=${r100} <= rungs($500)=${r500}`);
+    assert(r500 <= r5000, `expected rungs($500)=${r500} <= rungs($5000)=${r5000}`);
+    assert(r5000 <= CAPS.MAX_GRID_COUNT, `rungs should cap at MAX_GRID_COUNT=${CAPS.MAX_GRID_COUNT}`);
+});
+// 37. v1.2.3 — Quickstart: tiny account (< MIN_GRID_COUNT × minOrder) emits
+// a clear warning that plan() will fall back to uniform sizing.
+runTest("v1.2.3 quickstart: tiny notional emits min-order warning", baseInput, () => {
+    // $5 × 2× / $10 = 1 rung — below MIN_GRID_COUNT. Should warn.
+    const qs = runQuickstart({
+        coin: "BTC",
+        totalNotionalUsd: 5,
+        candles: baseInput.candles,
+        marketMeta: { ...baseInput.marketMeta, minOrderSizeUsd: 10 },
+        riskProfile: "conservative",
+    });
+    const minOrderWarning = qs.warnings.find((w) => w.includes("notional × leverage"));
+    assert(minOrderWarning !== undefined, "expected notional × leverage warning for tiny account");
+    assert(minOrderWarning.includes("uniform sizing"), "warning should mention uniform-sizing fallback path");
+});
 // eslint-disable-next-line no-console
 console.log("\nAll self-tests passed ✅");

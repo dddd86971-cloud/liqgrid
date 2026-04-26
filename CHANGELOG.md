@@ -2,6 +2,59 @@
 
 All notable changes to hyperliquid-aigrid are documented here.
 
+## [1.2.3] — 2026-04-26
+
+### Changed
+
+- **Notional-aware `quickstart` range derivation.** Pre-v1.2.3 the range
+  was purely vol-driven (`mark ± k × σ_daily × √7 × profileWidth`),
+  giving the same ±4-7% range to all account sizes. For small accounts
+  forced into `MIN_GRID_COUNT=4` rungs, this meant rungs ~1%+ apart while
+  hourly vol was ~0.3% — so the grid would sit inactive for hours waiting
+  for an outlier move. v1.2.3 picks the **tighter** of:
+  - **(a) natural geometry** — `(rungs - 1) × σ_hourly × profileGap`,
+    where `rungs` is bounded by `floor(notional × leverage / minOrder)`
+    clamped to `[MIN_GRID_COUNT, MAX_GRID_COUNT]`. Each gap is one
+    σ_hourly × profile multiplier, so the grid trades on ordinary
+    intraday wiggles.
+  - **(b) vol envelope** — the original `k × σ_daily × √7 × profileWidth`,
+    preserved as an upper bound so large notionals don't blow out to a
+    30%+ range.
+
+  Real-world impact at σ_d=1.35% (BTC, calm day):
+
+  | Account | Range pre-1.2.3 | Range post-1.2.3 | Source |
+  |---|---|---|---|
+  | $24 | ±4.4% (always) | **±0.41%** | natural — 4 rungs × σ_h |
+  | $100 | ±4.4% | **±2.61%** | natural — 20 rungs × σ_h |
+  | $5000 | ±4.4% | ±4.36% | vol envelope (unchanged) |
+
+- **New `PROFILE_GAP` constants** — `1.0 / 1.5 / 2.0` for
+  conservative / balanced / aggressive. Conservative trades on hourly
+  vol; aggressive accepts ~4-hour gaps.
+
+### Added
+
+- **`tiny notional` quickstart warning.** When
+  `notional × leverage < MIN_GRID_COUNT × minOrder`, quickstart now
+  emits a clear warning that `plan()` will auto-fall back to uniform
+  sizing, with the exact recommended bump amount
+  (`≥ MIN_GRID_COUNT × minOrder / leverage`) to restore full coverage.
+- **Self-tests: 37 → 41.** New cases: small-account uses natural
+  geometry; large-account uses vol-envelope; rung count monotonically
+  grows with notional; tiny notional emits min-order warning.
+
+### Notes
+
+- Existing `plan()` semantics unchanged. Only `quickstart()` was
+  modified. Users who pass an explicit `(rangeLow, rangeHigh)` to
+  `plan` see no behavior change. Users who go through `quickstart`
+  see better defaults — especially small accounts.
+- `planHash` for plans built from explicit inputs is byte-identical
+  to v1.2.2. Plans built via `quickstart → plan` will produce different
+  `planHash` because the range itself differs (intentional — that's
+  the point of the change).
+
 ## [1.2.2] — 2026-04-26
 
 ### Added
